@@ -275,7 +275,7 @@ export interface Sperren { waechter: number; klassifikator: number; grund: strin
 interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; jobtyp?: Jobtyp; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; resetsAt?: number; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
-  auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
+  auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string }; vorgeprueft?: boolean;
   parent?: string; rolle?: Rolle; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean; delegation?: string }
 const orchFile = join(cfg.stateDir, 'orch.json');
 let orchMap: Record<string, OrchEntry> = {};
@@ -634,7 +634,7 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), jobtyp: e.jobtyp ?? null, dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), jobtyp: e.jobtyp ?? null, dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, vorgeprueft: e.vorgeprueft === true, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -1552,7 +1552,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
     rolle: rolleVon({ leit: kind === 'leitstand', phase: orchMap[key]?.phase, profil: orchMap[key]?.profil }), rang: 1, modell: orchMap[key]?.phase ? phaseModell(orchMap[key]!.phase!).modell : undefined,
-    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft,
+    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: orchMap[key]?.vorgeprueft === true,
     claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber',
     // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
     ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { userId: req.userId, jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
@@ -3348,7 +3348,7 @@ export async function delegationUrteil(userId: string, convId: string, b: { id?:
 }
 
 /** phase_wechseln: Übergabedatei prüfen (C1), Wechsel für das Ende dieses Versuchs anmelden (gilt im selben Zug). */
-export async function phaseWechseln(userId: string, convId: string, b: { phase?: unknown; uebergabe?: unknown }): Promise<Res> {
+export async function phaseWechseln(userId: string, convId: string, b: { phase?: unknown; uebergabe?: unknown; vorpruefung?: unknown }): Promise<Res> {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   const e = orchMap[key];
   if (!e || (e.kind ?? 'strand') !== 'strand') return { ok: false, status: 403, error: 'phase_wechseln gibt es nur in Strängen.' };
@@ -3356,6 +3356,8 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   if (!lead?.req) return { ok: false, status: 409, error: 'phase_wechseln geht nur während eines laufenden Strang-Zugs.' };
   const phase = String(b.phase ?? '') as Phase;
   if (!PHASEN.includes(phase)) return { ok: false, status: 400, error: `phase: ${PHASEN.join(', ')}.` };
+  const nachPush = e.phase === 'review' && phase === 'push';
+  if (nachPush && b.vorpruefung !== 'gruen' && b.vorpruefung !== 'rot') return { ok: false, status: 400, error: 'vorpruefung: „gruen“ oder „rot“ — beim Wechsel von review nach push muss das Ergebnis der Sonnet-Vorprüfung dabeistehen (Opus-Endprüfung läuft nur nach grüner Vorprüfung).' };
   const raw = String(b.uebergabe ?? '');
   if (!raw) return { ok: false, status: 400, error: 'uebergabe: Pfad der Übergabedatei im Arbeitsordner.' };
   let file: string;
@@ -3389,6 +3391,7 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
     }
   }
   e.phaseNeu = { phase, text, c2, at: Date.now() };
+  e.vorgeprueft = nachPush && b.vorpruefung === 'gruen';   // nur review→push mit grünem Urteil; jeder andere Wechsel setzt zurück
   saveMap();
   log('phase angemeldet', { conv: key, von: e.phase ?? null, nach: phase, c2, ersatz: ersatz.length });
   const p = e.profil ?? 'voll';

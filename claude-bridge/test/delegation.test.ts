@@ -43,7 +43,7 @@ before(async () => {
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   const wurl = `http://127.0.0.1:${(web.address() as any).port}`;
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MAX_LESER: '2', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_CLAUDEBUDGET: 'aus' /* sonst wartet jeder Folgezug im push zu Recht auf die Vorprüfung */, BRIDGE_MAX_LESER: '2', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: wurl, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: wurl, BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS,
       BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -280,6 +280,29 @@ test('Phasenwechsel (S3/C1): ungültige Übergabe abgelehnt; gültige → im sel
   const t3 = await send(conv(8), lead([{ tool: 'phase_wechseln', args: { phase: 'recherche', uebergabe: 'u2.md' } }]));
   assert.match(t3, /\(Mock-Phase\) recherche: Modell opus;/);
   assert.match(t3, /Opus bevorzugt: Eingriff mit Rückwirkung/);
+});
+
+test('Vorprüfung (Opus-Endprüfung nur nach grüner Sonnet-Vorprüfung): review→push braucht vorpruefung; nur grün setzt vorgeprueft, jeder andere Wechsel setzt zurück', async () => {
+  const dir = repo(ORCH, 's20');
+  await register('knut', conv(20), dir);
+  writeFileSync(join(dir, 'uebergabe.md'), UEB);
+  const vp = async () => (await orchState('knut')).find((s: any) => s.conv === conv(20)).vorgeprueft;
+  const wechsel = (args: any) => send(conv(20), lead([{ tool: 'phase_wechseln', args: { uebergabe: 'uebergabe.md', ...args } }]));
+  // push ohne review: kein Urteil nötig, aber nie vorgeprüft
+  await wechsel({ phase: 'push' });
+  assert.equal(await vp(), false);
+  await wechsel({ phase: 'review' });
+  const t = await wechsel({ phase: 'push' });
+  assert.match(t, /FEHLER 400: vorpruefung: „gruen“ oder „rot“/);
+  assert.equal(await vp(), false);
+  assert.match(await wechsel({ phase: 'push', vorpruefung: 'quatsch' }), /FEHLER 400: vorpruefung/);
+  await wechsel({ phase: 'push', vorpruefung: 'rot' });
+  assert.equal(await vp(), false);
+  await wechsel({ phase: 'review' });
+  await wechsel({ phase: 'push', vorpruefung: 'gruen' });
+  assert.equal(await vp(), true);
+  await wechsel({ phase: 'bau' });                                                               // zurück aus push → zurückgesetzt
+  assert.equal(await vp(), false);
 });
 
 test('Phasenwechsel nach Ersatz-Lead (C6): Brücke prüft den Strang-Stand und hängt die Prüfausgaben an die Übergabe', async () => {

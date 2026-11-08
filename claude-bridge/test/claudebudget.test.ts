@@ -145,13 +145,28 @@ test('11 Zug gebucht: Eimer sinkt, Hauptchat-Tag wächst; Kalibrierung aus Δ% d
 
 test('12 Endprüfung: gesammelt im Fenster, danach auf dem Konto mit Luft; ohne Sonnet-Vorprüfung gar nicht', () => {
   b.aktualisiere(cswap([acc(1, 10, 80), acc(2, 10, 30)]), { a: '1', b: '2' });
-  const o = { rolle: 'endpruefung', ereignis: 'ev', item: 'i1', modell: 'opus' };
+  const o = { rolle: 'endpruefung', ereignis: 'ev', item: 'i1', modell: 'opus', vorgeprueft: true };
   assert.match(b.claudeBudgetGrund(o, T0), /gebündelt/);
   assert.match(b.claudeBudgetGrund({ ...o, item: 'i2' }, T0 + 5 * 60_000), /gebündelt/);
   assert.equal(b.claudeBudgetGrund(o, T0 + 11 * 60_000), '');
   assert.equal(b.endpruefungKontoFuer('ev', 'i1', T0 + 11 * 60_000), 'b');
   assert.equal(b.endpruefungKontoFuer('ev', 'i2', T0 + 11 * 60_000), 'b');
   assert.match(b.claudeBudgetGrund({ ...o, ereignis: 'e2', item: 'z', vorgeprueft: false }, T0), /Sonnet-Vorprüfung/);
+});
+
+test('12b Endprüfung fail-closed: ohne grüne Sonnet-Vorprüfung wartet das Item, nach grün nur noch das Bündelfenster; Plan schließt es aus', () => {
+  b.aktualisiere(cswap([acc(1, 10, 80), acc(2, 10, 30)]), { a: '1', b: '2' });
+  const o = { rolle: 'endpruefung', ereignis: 'evf', item: 'p1', modell: 'opus' };
+  assert.match(b.claudeBudgetGrund(o, T0), /Sonnet-Vorprüfung/);                                   // undefined = nicht vorgeprüft
+  assert.match(b.claudeBudgetGrund({ ...o, vorgeprueft: false }, T0 + 11 * 60_000), /Sonnet-Vorprüfung/);
+  assert.match(b.claudeBudgetGrund({ ...o, vorgeprueft: true }, T0), /gebündelt/);                  // grün: nur Fenster
+  assert.equal(b.claudeBudgetGrund({ ...o, vorgeprueft: true }, T0 + 11 * 60_000), '');
+  assert.equal(b.endpruefungKontoFuer('evf', 'p1', T0 + 11 * 60_000), 'b');
+  const plan = b.endpruefungPlanen([{ id: 'x', items: [{ id: 'ok', sonnetOk: true }, { id: 'rot', sonnetOk: false }] }], [], { now: T0, kosten: () => 1 })[0];
+  assert.deepEqual([plan.items, plan.zurueck], [['ok'], ['rot']]);
+  // Item, dessen Vorprüfung nicht grün war, bekommt nie ein Konto
+  b.claudeBudgetGrund({ ...o, ereignis: 'evg', item: 'q1', vorgeprueft: false }, T0);
+  assert.equal(b.endpruefungKontoFuer('evg', 'q1', T0 + 11 * 60_000), null);
 });
 
 test('13 Probe: unbekanntes Konto wird beim ersten Sehen probiert, danach höchstens alle 30 min', async () => {

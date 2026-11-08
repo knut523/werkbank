@@ -123,8 +123,8 @@ const DELEG_TOOLS = [
   {
     name: 'phase_wechseln',
     description: 'Phasengrenze (plan-to-pr): phase = plan|council|pass-c|push (Opus) oder bau|recherche|review|bericht (Sonnet). uebergabe = Pfad einer Datei im Arbeitsordner mit den Abschnitten „## Ziel“, „## Stand“, „## Annahmen“, „## Offene Widersprüche“, „## Prüfausgaben“ (je mindestens 20 Zeichen oder „keine“, zusammen höchstens 8 000 Zeichen). Ist sie gültig, beendest du den Zug mit einem Satz; die Brücke setzt sofort in einer neuen Sitzung mit dem Modell der Phase fort, Kontext nur Auftrag + Übergabe.',
-    inputSchema: { type: 'object', properties: { phase: { type: 'string', enum: ['plan', 'council', 'pass-c', 'push', 'bau', 'recherche', 'review', 'bericht'] }, uebergabe: { type: 'string' } }, required: ['phase', 'uebergabe'] },
-    run: (a: any) => bridge('/internal/phase', { phase: a.phase, uebergabe: a.uebergabe }, 1_900_000),
+    inputSchema: { type: 'object', properties: { phase: { type: 'string', enum: ['plan', 'council', 'pass-c', 'push', 'bau', 'recherche', 'review', 'bericht'] }, uebergabe: { type: 'string' }, vorpruefung: { type: 'string', enum: ['gruen', 'rot'], description: 'Pflicht beim Wechsel von review nach push: Ergebnis der Sonnet-Vorprüfung. Nur „gruen“ lässt die Opus-Endprüfung zu.' } }, required: ['phase', 'uebergabe'] },
+    run: (a: any) => bridge('/internal/phase', { phase: a.phase, uebergabe: a.uebergabe, vorpruefung: a.vorpruefung }, 1_900_000),
   },
 ];
 
