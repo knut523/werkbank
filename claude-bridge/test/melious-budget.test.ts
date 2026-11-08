@@ -241,3 +241,64 @@ test('Buchung und Abrechnung unter derselben Kennung: der server-Pfad trifft die
   const nach2 = k.budgetBuche(u, 'nach-2', 'pruefung', TAG, env);
   assert.deepEqual([nach2.ok && nach2.betrag], [1800], 'verbraucht: 5 zählt nicht mehr als Buchung, Median bleibt 600');
 });
+
+// ---- Ende-zu-Ende: echter Melious-Strang-Zug über die Brücke (BRIDGE_MOCK=1), Abrechnung über die Werkbank ----
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { realpathSync, mkdirSync } from 'node:fs';
+
+test('Echter Zug: Vorabbuchung und Werkbank-Abrechnung treffen sich — Ledger wird gefüllt', { timeout: 60_000 }, async () => {
+  const PORT = 3447, CONV = '00000000-0000-4000-8000-0000000000bb';
+  const STATE = mkdtempSync(join(tmpdir(), 'budget-e2e-state-'));
+  const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'budget-e2e-orch-')));
+  const DIR = join(ORCH, 'strang-1'); mkdirSync(DIR);
+  const SKILLS = mkdtempSync(join(tmpdir(), 'budget-e2e-skills-'));
+  const HOMES = mkdtempSync(join(tmpdir(), 'budget-e2e-homes-'));
+  const VAULT = mkdtempSync(join(tmpdir(), 'budget-e2e-vault-'));
+  const MELKEY = `sk-mel-budget-${'y'.repeat(24)}`;
+  const bild = join(process.cwd(), 'src/server.ts');
+  const verbrauch: number[] = [];
+  let out = '';
+  // Werkbank-Nachbau: Konten (Claude + Melious), Kapazität, und die Abrechnung des Ist-Verbrauchs (Energie der Werkbank).
+  const web = createServer(async (rq, res) => {
+    let b = ''; for await (const c of rq) b += c;
+    if (rq.url === '/v1/models') { res.end(JSON.stringify({ object: 'list', data: [{ id: 'glm-5.3' }] })); return; }
+    if (rq.headers['x-werkbank-internal'] !== 'geheim') { res.statusCode = 403; res.end('{}'); return; }
+    if (rq.url === '/internal/claude-accounts') { res.end(JSON.stringify({ accounts: [{ id: 'chat', label: 'Chat-Schlüssel', token: null }, { id: 'melious', label: 'Melious', token: MELKEY, kind: 'melious', rest: 1_000_000 }] })); return; }
+    if (rq.url === '/internal/kapazitaet') { res.end(JSON.stringify({ meliousProzent: 30, unterBoden: false, claudeFrei: true, claudeFreiAb: null, prWartend: 0, stand: 500_000, topfMax: 1_024_000, echt: true })); return; }
+    if (rq.url === '/internal/melious-usage') { verbrauch.push(JSON.parse(b).conv); res.end(JSON.stringify({ energie: 284 })); return; }
+    if (rq.url === '/internal/session-start') { res.end(JSON.stringify({ text: '' })); return; }
+    res.end('{}');
+  });
+  await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
+  const proc = spawn(process.execPath, [bild], {
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+      WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', BRIDGE_VAULT_DIR: VAULT,
+      MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`, BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '2',
+      WERKBANK_ORCH_ROOTS: ORCH, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  proc.stdout!.on('data', (d) => { out += d; }); proc.stderr!.on('data', (d) => { out += d; });
+  const send = async (content: string) => {
+    const r = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, { method: 'POST', headers: { authorization: `Bearer sk-ant-oat01-budget-${'x'.repeat(24)}`, 'content-type': 'application/json', 'x-librechat-user-id': 'budget-e2e', 'x-librechat-conversation-id': CONV }, body: JSON.stringify({ model: 'claude-code', stream: true, messages: [{ role: 'user', content }] }) });
+    return await r.text();
+  };
+  const budget = () => { const z = JSON.parse(readFileSync(join(STATE, 'melious-budget.json'), 'utf8')).zustaende['budget-e2e']; return z; };
+  const warteAufLedger = async (n: number) => {
+    for (let i = 0; i < 100; i++) { try { if ((budget().ledger?.pruefung ?? []).length >= n) return; } catch { /* Datei noch nicht da */ } await new Promise((r) => setTimeout(r, 100)); }
+  };
+  try {
+    for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) break; } catch { /* noch nicht */ } await new Promise((r) => setTimeout(r, 100)); }
+    const an = await fetch(`http://127.0.0.1:${PORT}/internal/orchestrate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': 'geheim' }, body: JSON.stringify({ userId: 'budget-e2e', conv: CONV, dir: DIR, kind: 'strand', modell: 'melious:glm-5.3', jobtyp: 'pruefung' }) });
+    assert.equal(an.status, 200, 'Strang angemeldet: ' + await an.text());
+    await send('/melious an'); await send('Lies viel'); await warteAufLedger(1);   // Zug 1: Vorabbuchung, dann Abrechnung über die Werkbank
+    await send('Lies noch was'); await warteAufLedger(2);                         // Zug 2: dasselbe mit derselben Kennung
+    const z = budget();
+    assert.deepEqual(z.ledger.pruefung, [284, 284], 'Ledger hat die Ist-Werte: Buchung gefunden (sonst bliebe sie offen und das Ledger leer) — ' + out.slice(-1500));
+    assert.deepEqual(verbrauch, [CONV, CONV], 'die Werkbank bekommt je Zug eine Abrechnung');
+    assert.deepEqual(z.verlauf.map((v: any) => v.e), [284, 284], 'kein zweiter Weg (Freigeben) hat die Buchung vorher weggenommen');
+    assert.ok(Math.abs(z.eimer - (15000 - 2 * 284)) < 50, `Eimer trägt genau den Verbrauch (${Math.round(z.eimer)} statt ~${15000 - 2 * 284})`);
+  } finally {
+    proc.kill(); web.close();
+  }
+});

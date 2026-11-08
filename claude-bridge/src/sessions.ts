@@ -131,6 +131,8 @@ interface Live {
   carry?: string[];
   // Melious (Plan 162): Versuch auf dem Melious-Konto — Rest bis zum Deckel, usage je API-Antwort (Schätzung), Ergebnis-usage.
   melious?: { rest: number; calls: Map<string, MeliousUsage>; result: MeliousUsage | null; cut: boolean; fehler?: MeliousFehler; model?: string; faktoren?: Record<string, Faktor>; taktS?: number };
+  /** Melious-Verbrauch wurde in diesem Zug an die Werkbank gemeldet → deren Abrechnung (server.ts) verbraucht die Vorabbuchung. */
+  melBerichtet?: boolean;
   modelSeen?: string;   // Modell laut erster Antwort des Hauptzugs (bei Claude das tatsächliche, bei Melious mit festem Namen ebenso)
   profil?: Profil;      // Rollen-Profil des Strangs (Wächter: lesende Bash-Befehle für Leser, D7 b)
   // Plan 165: Worker (verdeckte Unterhaltung eines Strang-Leads) bzw. die Anfrage des laufenden Lead-Zugs (Zugang, Konten, MCP
@@ -806,7 +808,10 @@ function end(live: Live) {
   if (live.pending) { clearTimeout(live.pending.timer); live.pending = null; }
   detach(live);
   lives.delete(live.key);
-  budgetFreigeben(live.userId, live.key);   // Paket D: Vorabbuchung ohne Abrechnung zurück (sonst leert sich der Eimer an Zügen ohne Melious-Verbrauch)
+  // Paket D: Vorabbuchung ohne Abrechnung zurück (sonst leert sich der Eimer an Zügen ohne Melious-Verbrauch). Kam Melious-Verbrauch,
+  // verbraucht ihn die Abrechnung mit derselben Kennung — ein Freigeben hier wäre schneller als ihr Netzweg und ließe das Ledger
+  // (Median) leer. Bleibt die Meldung aus, holt der nächste Zug dieselbe Kennung (budgetBuche erstattet) oder die Buchung verfällt.
+  if (!live.melBerichtet) budgetFreigeben(live.userId, live.key);
   wecke();   // ein Platz ist frei (Plan 213 S1a)
 }
 
@@ -2053,7 +2058,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           countMelious(spent);
           energie = energieOf(spent, live.modelSeen ?? options.model, live.melious.faktoren);
           log('melious verbrauch', { conv: key, modell, ...spent, deckel: live.melious.cut });
-          try { req.onMeliousUsage?.(spent, live.modelSeen ?? options.model ?? null); } catch { /* egal */ }
+          try { req.onMeliousUsage?.(spent, live.modelSeen ?? options.model ?? null); live.melBerichtet = true; } catch { /* egal */ }
           meliousDone(live);
         }
         // Messung je Zug (Plan 165, S8): ein Eintrag je Versuch (Konto/Modell), für Hauptchat, Stränge und Worker.
