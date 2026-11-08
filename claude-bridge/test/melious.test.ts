@@ -10,8 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planQueue, accountEnv, normalizeAccounts, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, type Account } from '../src/accounts.ts';
 import { readOnlyBash } from '../src/tools.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3394;
+const [PORT, AUTO] = await freiePorts(2);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-mel-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-mel-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-mel-'));
@@ -359,7 +360,6 @@ test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über (Modell aus 
 });
 
 test('Auto-Modus: Melious-Züge laufen wie Claude-Züge im Auto-Modus (Klassifikator über das Gateway, geprüft mit echtem Claude Code)', async () => {
-  const AUTO = 3393;
   const p = spawn(process.execPath, ['src/server.ts'], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MELIOUS_NACHT: 'aus', BRIDGE_PORT: String(AUTO), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-mel-auto-')), BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`,
