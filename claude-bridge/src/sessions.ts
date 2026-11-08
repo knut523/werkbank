@@ -1593,7 +1593,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   // Melious-Lage je Person VOR der Zulassung schreiben (Gegenprüfung 19: die Setzung beim Zug-Start unten kam zu spät — der
   // erste Zug las „Melious nicht frei“ und blieb in der Schlange hängen). Der Zug unten schreibt sie mit frischen Konten erneut.
-  if (req.accounts) await req.accounts().then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); setzeMelious(req.userId, !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now())); } }).catch(() => {});
+  // Die Liste wird hier einmal geholt und vom Zug unten wiederverwendet (nur wenn der Zug nicht in der Schlange gewartet hat) — ein zweiter Abruf je Zug wäre Mehrlast auf dem internen Kanal.
+  let fruehKonten: Promise<any[] | null> | null = null;
+  if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); setzeMelious(req.userId, !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now())); } }); }
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1819,7 +1821,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
   // kontenFehlen: die Liste kam nicht (nur „chat“) — dann vor jeder „ausgeschöpft“-Meldung neu laden (Hotfix 15b).
   let kontenFehlen = false;
-  const ladeKonten = () => req.accounts!().catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  const ladeKonten = () => (fruehKonten && !gewartet ? fruehKonten : req.accounts!()).catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
   const accountsP = (req.accounts ? ladeKonten() : Promise.resolve(null))
     .then((list) => { kontenFehlen = !!req.accounts && list === null; return normalizeAccounts(list, req.token); });
   let extra = '';
