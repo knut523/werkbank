@@ -18,7 +18,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
 import { g0Env, g0GitArgs, g0Lesetoken } from './vorbau.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +31,7 @@ import { wb } from './db.ts';
 import { meliousSettings } from './melious.ts';
 import { execErlaubt, execMinuten, schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
 import { reviewsCol, nachNeuemKopf, tickerSettings, tickerAus, reviewErlaubt, ME, type TickerSettings } from './prticker.ts';
-import { vorlauf, basisVon, motorAbschnitt, motorAn } from './reviewmotor.ts';
+import { vorlauf, basisVon, motorAbschnitt, motorAn, reviewSchluessel, kommentarZahl, dedupeAn } from './reviewmotor.ts';
 import { pruefeBefunde, kommentarAusBefunden, entwurfHash, postenErlaubt, KOMMENTAR_FORM } from './befunde.ts';
 import { gedaechtnisFuer, gedaechtnisMd, type AlterKommentar } from './prgedaechtnis.ts';
 
@@ -834,6 +834,16 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const kontext = deps.kontext ? await deps.kontext(r.repo, r.number).catch(() => null) : null;
       const vorher = (await reviewsCol().find({ repo: r.repo, number: r.number, head: { $ne: r.head }, status: 'fertig', paket: { $exists: true } }).sort({ doneAt: -1 }).limit(1).toArray())[0] as any ?? null;
       const dm = await diffMaterial(wt, klonPfad(r.repo), kontext?.baseRefName ?? null, r.head, vorher?.head ?? null, deps.git);
+      // B3 (Wave 21): derselbe Schlüssel (Kopf, Basis, Kommentare) wurde schon reviewt → das vorhandene Urteil gilt, kein neuer Strang.
+      const schluessel = reviewSchluessel({ headSha: r.head, baseSha: dm.basis ?? null, kommentare: kommentarZahl(kontext) });
+      const gleich = dedupeAn() ? (await reviewsCol().find({ repo: r.repo, number: r.number, head: r.head, schluessel, status: 'fertig', _id: { $ne: r._id }, paket: { $exists: true } }).sort({ doneAt: -1 }).limit(1).toArray())[0] as any ?? null : null;
+      if (gleich) {
+        rmSync(dir, { recursive: true, force: true });
+        await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fertig', doneAt: now, schluessel, urteilVon: gleich._id, paket: gleich.paket, empfehlung: gleich.empfehlung ?? null, entwurf: gleich.entwurf ?? null, ohnePost: 'dedupe', note: `gleicher Stand (Kopf, Basis, Kommentare) wie ${gleich._id} — Urteil wiederverwendet`, startDay: null } });
+        await meldeStatus(r, statusZeile({ art: 'skipped', grund: 'same head, base and comments as the review already done — reusing its verdict' }), deps, now);
+        deps.log?.('pr-review dedupe', { pr: `${r.repo}#${r.number}`, von: String(gleich._id) });
+        continue;
+      }
       const v = kontext ? verknuepft(kontext) : null;
       if (kontext) writeFileSync(join(dir, 'kontext.md'), kontextMd(r, kontext, v!));
       for (const [name, text] of Object.entries(dm.dateien)) writeFileSync(join(dir, name), text);
@@ -886,7 +896,7 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const prompt = reviewPrompt(r, wt, paket, { tiefe, eta, melious: (await meliousSettings(u).catch(() => null))?.enabled === true, kontext: !!kontext, dm, vorher: dm.delta && vorher ? { head: vorher.head, paket: vorher.paket, url: vorherUrl } : null, verknuepft: v ?? undefined, tests: testsText }) + motor;
       writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
       const st = await deps.startOrch(u, { title: `Review ${r.repo.split('/')[1]}#${r.number}${dm.delta ? ' (Delta)' : ''}`, prompt, cwd: wt, code: false, lauf: 'PR-Reviews', aufrufer: 'pr-ticker', tiefe, modell: REVIEW_MODELL, vorrang: true });
-      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, tiefe, zeilen, eta, basis: dm.basis, delta: dm.delta, vorher: vorher ? vorher._id : null, kontext: !!kontext, note: dm.hinweis.join('; ') || null, retryAt: null } });
+      await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'läuft', strand: st.id, paket, schluessel, worktree: wt, tiefe, zeilen, eta, basis: dm.basis, delta: dm.delta, vorher: vorher ? vorher._id : null, kontext: !!kontext, note: dm.hinweis.join('; ') || null, retryAt: null } });
       // Der Strang läuft schon: ein Fehler hier darf nicht erneut einreihen (sonst zweiter Strang für denselben Stand).
       try { await deps.markStrand?.(st.id, { repo: r.repo, number: r.number, paket }, { eta: new Date(now.getTime() + eta * 60_000) }); }
       catch (e: any) { deps.log?.('pr-review markStrand', { pr: `${r.repo}#${r.number}`, error: scrub(e?.message ?? e) }); }
