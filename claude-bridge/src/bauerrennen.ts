@@ -103,10 +103,10 @@ export const bauerDeckelMs = (env: Env = process.env) => {
 };
 export const DECKEL_LOG = 'deckel';
 /** Gnadenfrist, in der ein abgebrochener Bauer seinen Abbruch bestätigen (sein Promise beenden) darf, bevor weitergemacht wird. */
-const ABBRUCH_FRIST_MS = 30_000;
+export const abbruchFristMs = (env: Env = process.env) => { const n = Number(env.BRIDGE_ABBRUCH_FRIST_S); return Number.isFinite(n) && n > 0 ? n * 1000 : 30_000; };
 /** Das Bauen eines Bauern mit Zeitlimit: Überschreitung → Signal abgebrochen (OC2-interrupt), Ergebnis mit log 'deckel'. Zurück erst, wenn der Bauer
  *  den Abbruch bestätigt hat (Promise beendet) — danach darf sein Unter-Worktree entfernt werden. */
-async function mitDeckel(start: (signal: AbortSignal) => Promise<BauErgebnis>, bauer: string, ms: number): Promise<BauErgebnis> {
+async function mitDeckel(start: (signal: AbortSignal) => Promise<BauErgebnis>, bauer: string, ms: number, fristMs: number): Promise<BauErgebnis> {
   const ac = new AbortController(), p = start(ac.signal);
   let t: NodeJS.Timeout | undefined;
   try {
@@ -114,7 +114,7 @@ async function mitDeckel(start: (signal: AbortSignal) => Promise<BauErgebnis>, b
     if (r.log === DECKEL_LOG) {
       ac.abort();
       let f: NodeJS.Timeout | undefined;
-      await Promise.race([p.catch(() => null), new Promise((res) => { f = setTimeout(res, ABBRUCH_FRIST_MS); })]).finally(() => clearTimeout(f));
+      await Promise.race([p.catch(() => null), new Promise((res) => { f = setTimeout(res, fristMs); })]).finally(() => clearTimeout(f));
     }
     return r;
   } finally { if (t) clearTimeout(t); }
@@ -178,8 +178,8 @@ const pruefe = async (d: Deps, a: Auftrag, r: BauErgebnis): Promise<Kandidat> =>
 /** Ein Best-of-N-Lauf: bauen (parallel), prüfen, wählen; scheitern alle → glm-5.3 mit allen Fehlerlogs. Ledger-Hook je Lauf. */
 export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statistik } = {}): Promise<Lauf> {
   const bauer = bauerFuer(a.dateien, o.env, o.stat);
-  const deckelS = bauerDeckelMs(o.env);
-  const ks = await Promise.all(bauer.map(async (b) => pruefe(d, a, await mitDeckel((signal) => d.bauen(b, a, { signal }).catch((e) => ({ bauer: b, ok: false, diff: '', log: String(e) })), b, deckelS))));
+  const deckelS = bauerDeckelMs(o.env), fristS = abbruchFristMs(o.env);
+  const ks = await Promise.all(bauer.map(async (b) => pruefe(d, a, await mitDeckel((signal) => d.bauen(b, a, { signal }).catch((e) => ({ bauer: b, ok: false, diff: '', log: String(e) })), b, deckelS, fristS))));
   const rf = rangfolge(ks);
   let abgelehnt = rf.abgelehnt, sieger: Kandidat | null = null;
   const lauf: Lauf = { auftrag: a, sieger: null, fixrunden: 0, logs: [] };
@@ -197,7 +197,7 @@ export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statist
   if (bauer.length === 2) zaehle(o.stat ?? neueStatistik(), sieger?.bauer ?? null);
   if (!sieger && !lauf.zerlegen && bauer[0] !== OPUS) {
     const logs = lauf.logs.concat(abgelehnt.map((x) => `${x.bauer}: ${x.grund}`), ks.map((k) => k.schnell?.log ?? k.log ?? '').filter(Boolean));
-    const k = await pruefe(d, a, await mitDeckel((signal) => d.bauen(GLM, a, { fehlerlogs: logs, signal }).catch((e) => ({ bauer: GLM, ok: false, diff: '', log: String(e) })), GLM, deckelS));
+    const k = await pruefe(d, a, await mitDeckel((signal) => d.bauen(GLM, a, { fehlerlogs: logs, signal }).catch((e) => ({ bauer: GLM, ok: false, diff: '', log: String(e) })), GLM, deckelS, fristS));
     bauer.push(GLM); lauf.logs = logs;
     const w = waehle([k]); sieger = w.sieger; abgelehnt = abgelehnt.concat(w.abgelehnt); lauf.sieger = sieger;
   }

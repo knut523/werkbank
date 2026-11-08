@@ -57,8 +57,8 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return { ok: false, text: '', grund: 'Sonnet-Klasse (Geld/Konten) oder Melious leer — Sonnet baut, kein Best-of-N' };
   let zone = false;
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
-  const deps: Deps = {
-    async bauen(bauer, a, op) {
+  const laufend: { bauer: string; p: Promise<unknown>; offen: () => boolean }[] = [];
+  const bauenInner: Deps['bauen'] = async (bauer, a, op) => {
       const s = await subWorktree(o.cwd, `${o.id}-${kurz(bauer)}`);
       if ('error' in s) return { bauer, ok: false, diff: '', log: s.error };
       subs.set(bauer, { dir: s.dir, base: s.base });
@@ -74,6 +74,14 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
         if (inSchutzzone(namen, env)) { zone = true; return { bauer, ok: false, diff: '', log: 'Schutzzone im Diff' }; }
       }
       return { bauer, ok: r.ok && !!diff.trim(), diff, log: r.ok ? 'keine Änderung' : r.grund };
+    
+  };
+  const deps: Deps = {
+    bauen(bauer, a, op) {
+      let fertig = false;
+      const p = bauenInner(bauer, a, op).finally(() => { fertig = true; });
+      laufend.push({ bauer, p, offen: () => !fertig });
+      return p;
     },
     async schnell(k): Promise<Schnell> {
       const s = subs.get(k.bauer)!;
@@ -94,7 +102,13 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     geschlossen.set(o.id, { cwd: o.cwd, lauf, patch: sieger!.diff, patches });
     for (const k of geschlossen.keys()) { if (geschlossen.size <= 50) break; geschlossen.delete(k); }   // bounded: oldest out (loser retry only matters for 24 h)
   }
-  for (const s of subs.values()) await removeWorktree(s.dir).catch(() => {});
+  // Council 6: ein Bauer, der den Abbruch nicht bestätigt hat (Gnadenfrist um), behält seinen Worktree, bis sein Promise endet.
+  for (const [b, s] of subs) {
+    const l = laufend.find((x) => x.bauer === b && x.offen());
+    if (!l) { await removeWorktree(s.dir).catch(() => {}); continue; }
+    o.status?.(`⚠️ Best-of-N: Abbruch unbestätigt — ${b} läuft noch, Worktree ${s.dir} bleibt bis zu seinem Ende`);
+    void l.p.catch(() => {}).then(() => removeWorktree(s.dir).catch(() => {}));
+  }
   if (zone) return { ok: false, text: '', grund: 'Schutzzone (Diff berührt Migration/Auth/Billing/Workflow/.env) — Opus baut, Sieger nicht angewendet' };
   if (lauf.zerlegen) return { ok: false, text: '', grund: 'Punkt zu groß (Deckel überschritten) — im Plan kleiner schneiden' };
   if (!ok) return { ok: false, text: '', grund: sieger ? 'Best-of-N: Sieger-Diff ließ sich nicht anwenden' : 'Best-of-N: kein Bauer lieferte einen sauberen Diff' };
