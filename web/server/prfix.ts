@@ -484,7 +484,7 @@ async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: 
   for (const [name, text] of Object.entries(dm.dateien)) writeFileSync(join(dir, name), text);
   const prompt = fixPrompt({ ...f, head }, { wt, paket, zweig: pr!.headRefName, basis: pr!.baseRefName, kontext: !!kontext, offene: f.auftrag ? '' : offenePunkte(kontext, f.by), gate: deps.gatePfad ?? null, alle: kontext ? punkteFuerAuftrag(alleOffenenPunkte(kontext)) : undefined });
   writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
-  const st = await deps.startOrch(u, { title: `Fix ${f.repo.split('/')[1]}#${f.number}`, prompt, cwd: wt, code: false, profil: 'bauer', lauf: 'PR-Fixes', aufrufer: 'pr-ticker', tiefe: 'regular', modell: REVIEW_MODELL, vorrang: true });
+  const st = await deps.startOrch(u, { title: `Fix ${f.repo.split('/')[1]}#${f.number}`, prompt, cwd: wt, code: false, profil: 'bauer', lauf: 'PR-Fixes', aufrufer: 'pr-ticker', tiefe: 'regular', modell: REVIEW_MODELL, vorrang: true, jobtyp: 'dringend' });   // Fixrunde nach abgelehnter Review: Rang 0 (Paket D)
   // Nur aus „startet“ (Gegenprüfung M1): hat der Reaper den Eintrag inzwischen abgeschlossen, wird er nie geprüft oder gepusht.
   await fixesCol().updateOne({ _id: f._id, status: 'startet' }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, head, zweig: pr!.headRefName, basis: pr!.baseRefName, mb: dm.basis, autor: kontext?.author ?? null, eta: FIX_ETA_MIN, note: dm.hinweis.join('; ') || null } });
   deps.log?.('pr-fix gestartet', { pr: `${f.repo}#${f.number}`, strand: st.id });

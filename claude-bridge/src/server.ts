@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
-import { budgetAbrechnen } from './kapazitaet.ts';
+import { budgetAbrechnen, budgetMelder } from './kapazitaet.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -30,6 +30,8 @@ import { dirname, join } from 'node:path';
 const WEB_URL = process.env.WERKBANK_URL || 'http://127.0.0.1:3070';
 const STATE_DIR = process.env.BRIDGE_STATE_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.runtime', 'bridge');
 const INTERNAL = process.env.WERKBANK_INTERNAL_TOKEN || '';
+// Paket D: Airbag-Auslösung (einmal je Auslösung, kapazitaet.ts) → Bedarfskanal der Werkbank ("Braucht Hauptsitzung"); ohne Token nur Log.
+budgetMelder((userId, _text, art) => { if (art === 'airbag' && INTERNAL && userId) fetch(`${WEB_URL}/internal/melious-airbag`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId }), signal: AbortSignal.timeout(5000) }).catch(() => {}); });
 const MCP_DIR = process.env.WERKBANK_MCP_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'mcp');
 
 /**
@@ -408,7 +410,7 @@ const server = createServer(async (req, res) => {
       // Tiefe (Plan 205): nur Stränge, nur beim Start; unbekannt → 400.
       if (kind === 'strand' && b.tiefe != null && !TIEFEN.includes(b.tiefe)) return json(res, 400, { error: 'Tiefe: quick, regular oder deep.' });
       const tiefe = kind === 'strand' ? b.tiefe as Tiefe | undefined : undefined;
-      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true, ...(b.laeufer === 'jcode' || b.laeufer === 'oc2' ? { laeufer: b.laeufer as 'jcode' | 'oc2' } : {}) }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
+      try { registerOrchestration(userId, conv, real!, kind, { modell, risiko, profil, tiefe, vorrang: b.vorrang === true, ...(typeof b.jobtyp === 'string' ? { jobtyp: b.jobtyp } : {}), ...(b.laeufer === 'jcode' || b.laeufer === 'oc2' ? { laeufer: b.laeufer as 'jcode' | 'oc2' } : {}) }); } catch (e: any) { return json(res, e.status ?? 500, { error: e.message }); }
       log(kind === 'leitstand' ? 'leitstand angemeldet' : 'strang angemeldet', { user: userId, conv });
       return json(res, 200, { ok: true, dir: real, mode: autoFor({ email }) });
     }

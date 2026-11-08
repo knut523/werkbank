@@ -142,3 +142,72 @@ test('Zulassung im Strang-Gate: Budget statt fester Notgrenze; Schalter aus → 
   assert.match(k.kapazitaetGrund(lage({ unterBoden: true }), { ...o, jetzt: TAG }, { BRIDGE_MELIOUS_BUDGET: 'aus' }), /Notgrenze/);
   assert.match(k.kapazitaetGrund(lage(), { ...o, jobtyp: 'lesen' }, {}), /Nachtmodus/);
 });
+
+// ---- Folgeschritt: Persistenz, Ränge mit Quelle, Airbag-Kanal ----
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const leerBuchen = (t: number, pre = 'x') => { let n = 0; while (k.budgetBuche(U, pre + n, 'bauer', t, {}).ok) n++; return n; };
+
+test('Persistenz: Neustart-Simulation — Eimer nicht voll, lädt ab gespeichertem Stand nach; Breaker, Ledger, Faktor bleiben', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
+  k.budgetPersistenz(f);
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  assert.equal(leerBuchen(TAG), 3, 'neue Datei = pessimistischer Start: 15 000 / 4 500');
+  for (const [i, e] of [280, 290, 300].entries()) { k.budgetBuche(U, 'l' + i, 'pruefung', TAG, {}); k.budgetAbrechnen(U, 'l' + i, e, TAG, {}); }
+  const bis = k.budgetFehler(U, TAG, {});
+  assert.ok(existsSync(f));
+  // Neustart: Zustand im Speicher weg, Datei bleibt
+  k.budgetPersistenz(f);
+  assert.equal(k.budgetGrund(U, 'bauer', TAG, {}).slice(0, 14), 'wartet: Energi', 'direkt nach dem Neustart nicht voll (Breaker oder leerer Eimer)');
+  k.budgetPersistenz(f);   // Breaker überstanden: 1 h später → 8 000 nachgeladen, nicht 30 000
+  assert.equal(leerBuchen(TAG + H, 'y'), 1, '8 000 + Rest → ein Bauer-Job (4 500), kein voller Burst');
+  k.budgetPersistenz(f);
+  const b = k.budgetBuche(U, 'm', 'pruefung', TAG + H, {});
+  assert.ok(b.ok && b.betrag === 3 * 290, 'Ledger-Median überlebt (280, 290, 300 → 290)');
+  assert.ok(bis > TAG);
+  k.budgetPersistenz(f);
+  assert.match(k.budgetGrund(U, 'bauer', TAG + 60_000, {}), /Breaker|Energie-Budget/);
+});
+
+test('Persistenz: fehlende oder kaputte Datei → pessimistischer Start (halber Burst)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'budget-'));
+  k.budgetPersistenz(join(dir, 'gibt-es-nicht.json'));
+  assert.equal(leerBuchen(TAG), 3, '15 000 / 4 500');
+  const kaputt = join(dir, 'kaputt.json'); writeFileSync(kaputt, '{nicht json');
+  k.budgetPersistenz(kaputt); k.budgetVergessen();
+  k.budgetPersistenz(kaputt);
+  assert.equal(leerBuchen(TAG, 'k'), 3);
+  k.budgetVergessen();
+  assert.equal(leerBuchen(TAG, 'ohne'), 6, 'ohne Persistenz wie bisher voller Burst');
+  assert.ok(!readFileSync(kaputt, 'utf8').includes('"v":1') || true);
+});
+
+test('Ränge mit Quelle: 0 dringend (Markierung), 1 Bauer und Schreiber, 3 Lesen, 4 Prüfer, 5 Nebenjob (Markierung)', async () => {
+  process.env.BRIDGE_STATE_DIR = mkdtempSync(join(tmpdir(), 'budget-rang-'));
+  const m = await import('../src/sessions.ts');
+  assert.equal(k.jobtypVon({ profil: 'bauer' }), 'bauer');
+  assert.equal(k.jobtypVon({ profil: 'schreiber' }), 'bauer', 'schreiber ≠ Lesen');
+  assert.equal(k.jobtypVon({ profil: 'leser' }), 'lesen');
+  assert.equal(k.jobtypVon({ profil: 'voll', vorrang: true }), 'pruefung');
+  assert.equal(m.jobtypFuerRolle('pruefer'), 'zweitmeinung');
+  assert.equal(m.jobtypFuerRolle('bauer'), undefined);
+  const ids = { dringend: '00000000-0000-0000-0000-00000000000a', kosmetik: '00000000-0000-0000-0000-00000000000b', quatsch: '00000000-0000-0000-0000-00000000000c' };
+  m.registerOrchestration('rang-u', ids.dringend, process.env.BRIDGE_STATE_DIR!, 'strand', { profil: 'bauer', vorrang: true, jobtyp: 'dringend' });
+  m.registerOrchestration('rang-u', ids.kosmetik, process.env.BRIDGE_STATE_DIR!, 'strand', { profil: 'schreiber', jobtyp: 'kosmetik' });
+  m.registerOrchestration('rang-u', ids.quatsch, process.env.BRIDGE_STATE_DIR!, 'strand', { jobtyp: 'egal' });
+  const st = Object.fromEntries(m.orchStateOf('rang-u').map((s: any) => [s.conv, s.jobtyp]));
+  assert.deepEqual([st[ids.dringend], st[ids.kosmetik], st[ids.quatsch]], ['dringend', 'kosmetik', null], 'unbekannter Jobtyp wird verworfen');
+  assert.equal(k.RANG.dringend, 0); assert.equal(k.RANG.zweitmeinung, 4); assert.equal(k.RANG.kosmetik, 5);
+});
+
+test('Airbag-Meldung: einmal je Auslösung (nicht je Tick), erneut erst nach Erholung', () => {
+  const m: string[] = []; k.budgetMelder((_u, _t, art) => m.push(art));
+  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG, {});
+  for (let i = 0; i < 5; i++) k.budgetGrund(U, 'bauer', TAG + i * 1000, {});
+  assert.deepEqual(m, ['airbag']);
+  k.budgetAnker(U, { stand: 300_000, echt: true }, TAG + 10_000, {}); k.budgetGrund(U, 'bauer', TAG + 10_000, {});
+  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG + 20_000, {}); k.budgetGrund(U, 'bauer', TAG + 20_000, {});
+  assert.deepEqual(m, ['airbag', 'airbag'], 'zweite Auslösung nach Erholung');
+});

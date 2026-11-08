@@ -93,7 +93,7 @@ export async function bedarfAntworten(u: User, id: string, a: { antwort: BedarfA
   const entziehen = async () => { if (bis && neu) await deps.entziehen?.(u, b.strand.id, real).catch(() => null); };
   const r = await col().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: a.antwort, notiz: a.notiz.slice(0, 1000), antwortAt: new Date(now), ...(bis ? { bis, pfadReal: real } : {}) } });
   if (!r.modifiedCount) { await entziehen(); throw Object.assign(new Error('Schon beantwortet — Seite neu laden.'), { status: 409 }); }
-  try { await deps.senden(u, b.strand.id, bedarfAntwortText({ ...b, pfad: real }, a.antwort, a.notiz, bis)); }
+  try { if (b.strand.id !== 'melious-budget') await deps.senden(u, b.strand.id, bedarfAntwortText({ ...b, pfad: real }, a.antwort, a.notiz, bis)); }
   catch (e) { await col().updateOne({ _id: id as any }, { $set: { status: 'offen' }, $unset: { antwortAt: '', notiz: '', bis: '', pfadReal: '' } }); await entziehen(); throw e; }
   return { id, status: a.antwort, bis };
 }

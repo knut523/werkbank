@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 // Zulassung nach echter Kapazität (Knut 07.11.: „I want more than 8“, council-tempo-0711.md): ein neuer Strang-Zug startet nicht nach
 // fester Zahl, sondern wenn er passt — RAM (schaetzung.ts, 3 GB Reserve), Melious ≥ Untergrenze (für bauende Stränge: GLM-Bauer),
 // Claude-Luft (Lead und Prüfer brauchen Claude) und höchstens BRIDGE_PR_DECKEL (6) PRs, die auf Knuts Go warten (nur neue Stränge).
@@ -70,11 +71,12 @@ const zahl = (v: unknown, d: number, min = 0) => { const s = String(v ?? '').tri
 
 export const RANG = { dringend: 0, bauer: 1, pruefung: 2, lesen: 3, zweitmeinung: 4, kosmetik: 5 } as const;
 export type Jobtyp = keyof typeof RANG;
+export const istJobtyp = (v: unknown): v is Jobtyp => typeof v === 'string' && Object.hasOwn(RANG, v);
 /** Stand-in für den Median, solange das Ledger zu wenig Läufe hat (Review-Lauf gemessen ~284); gebucht wird immer das Dreifache. */
 export const MEDIAN_VORGABE: Record<Jobtyp, number> = { dringend: 1500, bauer: 1500, pruefung: 300, lesen: 300, zweitmeinung: 400, kosmetik: 100 };
 /** Rang einer Strang-Zug-Art (Profil). Prüfer/Zweitmeinung/Kosmetik kommen über den Aufrufer (jobtyp ausdrücklich). */
 export const jobtypVon = (o: { profil?: string | null; vorrang?: boolean }): Jobtyp =>
-  o.vorrang ? 'pruefung' : o.profil === 'leser' || o.profil === 'schreiber' ? 'lesen' : 'bauer';
+  o.vorrang ? 'pruefung' : o.profil === 'leser' ? 'lesen' : 'bauer'   // schreiber schreibt wie der Bauer: Rang 1;
 
 export function budgetCfg(env: Env = process.env) {
   const topf = zahl(env.BRIDGE_MELIOUS_TOPF, 1_024_000, 1);
@@ -107,14 +109,49 @@ interface Zustand {
 }
 const zustaende = new Map<string, Zustand>();
 const BUCHUNG_LEBEN_MS = 30 * 60_000;
-export const budgetVergessen = () => { zustaende.clear(); melder = () => {}; leseGlobal = 'melious'; };
-let melder: (userId: string, text: string) => void = () => {};
-/** Meldungen (Airbag, Abgleich) gehen an diese Senke — der Betrieb hängt Log/Ereignis daran. */
-export const budgetMelder = (f: (userId: string, text: string) => void) => { melder = f; };
+export const budgetVergessen = () => { zustaende.clear(); melder = []; leseGlobal = 'melious'; datei = null; geladen = null; startHalb = false; };
+type Melder = (userId: string, text: string, art: 'airbag' | 'abgleich') => void;
+let melder: Melder[] = [];
+/** Meldungen (Airbag, Abgleich) gehen an diese Senken — Log und Bedarfskanal der Werkbank hängen sich daran. Mehrere erlaubt. */
+export const budgetMelder = (f: Melder) => { melder.push(f); };
+const melde = (u: string, t: string, a: 'airbag' | 'abgleich') => { for (const f of melder) { try { f(u, t, a); } catch { /* egal */ } } };
+
+// Persistenz (Muster schlange.ts: tmp + rename): Eimerstand mit Zeitstempel, Ledger, Breaker, Tagesfaktor, Anker. Nach dem Neustart lädt der
+// Eimer ab dem gespeicherten Stand mit Füllrate × vergangene Zeit nach (nie voll); fehlende/kaputte Datei → pessimistisch (halber Burst).
+let datei: string | null = null;
+let geladen: Record<string, any> | null = null;
+let startHalb = false;
+const FELDER = ['eimer', 'eimerAt', 'reserve', 'stand', 'standAt', 'echt', 'echtAt', 'topf', 'ledger', 'verlauf', 'pause', 'fehler', 'breakerBis', 'faktor', 'abgleichTag', 'lese'] as const;
+function speichern() {
+  if (!datei) return;
+  try {
+    const out: Record<string, any> = {};
+    for (const [u, z] of zustaende) out[u] = Object.fromEntries(FELDER.map((f) => [f, (z as any)[f]]));
+    writeFileSync(datei + '.tmp', JSON.stringify({ v: 1, zustaende: out }));
+    renameSync(datei + '.tmp', datei);
+  } catch { /* Platte voll o. ä.: der Speicher läuft weiter */ }
+}
+/** Zustand auf Platte halten (null = aus, Tests); liest beim Aufruf, was ein voriger Prozess hinterließ. */
+export function budgetPersistenz(pfad: string | null): void {
+  zustaende.clear(); datei = pfad; geladen = null; startHalb = false;
+  if (!pfad) return;
+  try { const j = JSON.parse(readFileSync(pfad, 'utf8')); if (j && typeof j.zustaende === 'object' && j.zustaende) { geladen = j.zustaende; leseGlobal = Object.values<any>(geladen).some((g) => g?.lese === 'claude') ? 'claude' : 'melious'; } else startHalb = true; }
+  catch { startHalb = true; }
+}
 
 function zust(userId: string, now: number, c: Cfg): Zustand {
   let z = zustaende.get(userId);
-  if (!z) zustaende.set(userId, z = { eimer: c.burst, eimerAt: now, reserve: c.reserve, stand: null, standAt: now, echt: false, echtAt: 0, topf: c.topf, offen: new Map(), ledger: {}, verlauf: [], pause: false, fehler: 0, breakerBis: 0, faktor: 1, abgleichTag: '', lese: leseGlobal });
+  if (!z) {
+    const g = geladen?.[userId], num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+    z = { eimer: startHalb ? c.burst / 2 : c.burst, eimerAt: now, reserve: startHalb ? c.reserve / 2 : c.reserve, stand: null, standAt: now, echt: false, echtAt: 0, topf: c.topf, offen: new Map(), ledger: {}, verlauf: [], pause: false, fehler: 0, breakerBis: 0, faktor: 1, abgleichTag: '', lese: leseGlobal };
+    if (g) {   // gespeicherter Stand: Zeitstempel bleiben, fuellen() lädt mit Rate × vergangene Zeit nach
+      z.eimer = Math.min(c.burst, num(g.eimer, c.burst / 2)); z.eimerAt = Math.min(now, num(g.eimerAt, now)); z.reserve = Math.min(c.reserve, num(g.reserve, c.reserve / 2));
+      z.stand = typeof g.stand === 'number' && Number.isFinite(g.stand) ? g.stand : null; z.standAt = Math.min(now, num(g.standAt, now)); z.echt = g.echt === true; z.echtAt = num(g.echtAt, 0); z.topf = num(g.topf, c.topf);
+      z.ledger = g.ledger && typeof g.ledger === 'object' ? g.ledger : {}; z.verlauf = Array.isArray(g.verlauf) ? g.verlauf.filter((v: any) => typeof v?.at === 'number' && typeof v?.e === 'number') : [];
+      z.pause = g.pause === true; z.fehler = num(g.fehler, 0); z.breakerBis = num(g.breakerBis, 0); z.faktor = Math.min(1.5, Math.max(0.5, num(g.faktor, 1))); z.abgleichTag = typeof g.abgleichTag === 'string' ? g.abgleichTag : ''; z.lese = g.lese === 'claude' ? 'claude' : 'melious';
+    }
+    zustaende.set(userId, z);
+  }
   return z;
 }
 const echtGilt = (z: Zustand, now: number, c: Cfg) => z.echt && now - z.echtAt < c.ankerAlterH * 3_600_000;
@@ -146,7 +183,7 @@ function fuellen(z: Zustand, now: number, c: Cfg, userId = '') {
   // Airbag mit Hysterese: Pause unter 2× Boden, Ende ab 2,5× Boden.
   const s2 = geschaetzterStand(z, now, c), b = bodenFuer(z, now, c);
   if (s2 !== null) {
-    if (!z.pause && s2 < 2 * b) { z.pause = true; melder(userId, `Melious-Airbag: geschätzter Stand ${Math.round(s2)} unter 2× Boden (${Math.round(2 * b)}) — Melious-Jobs pausieren, bis der Topf sich erholt. Bedarf: Stand im Dashboard prüfen, Anker setzen.`); }
+    if (!z.pause && s2 < 2 * b) { z.pause = true; melde(userId, `Melious-Airbag: geschätzter Stand ${Math.round(s2)} unter 2× Boden (${Math.round(2 * b)}) — Melious-Jobs pausieren, bis der Topf sich erholt. Stand im Dashboard prüfen, Anker setzen.`, 'airbag'); speichern(); }
     else if (z.pause && s2 >= 2.5 * b) z.pause = false;
   }
 }
@@ -158,6 +195,7 @@ export function budgetAnker(userId: string, o: { stand: number | null | undefine
   if (typeof o.topf === 'number' && o.topf > 0) z.topf = o.topf;
   if (o.echt) { z.stand = Math.min(z.topf, o.stand); z.standAt = now; z.echt = true; z.echtAt = now; }
   else if (z.stand === null) { z.stand = Math.min(z.topf, o.stand); z.standAt = now; }   // erste Schätzung der Werkbank; danach zählt die eigene Buchführung
+  if (o.echt) speichern();
 }
 
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -200,6 +238,7 @@ export function budgetBuche(userId: string, id: string, jobtyp: Jobtyp, now = Da
   if (aus === 'reserve') z.reserve -= betrag; else z.eimer -= betrag;
   const alt = z.offen.get(id); if (alt) { if (alt.aus === 'reserve') z.reserve = Math.min(c.reserve, z.reserve + alt.betrag); else z.eimer = Math.min(c.burst, z.eimer + alt.betrag); }
   z.offen.set(id, { id, jobtyp, betrag, aus, at: now });
+  speichern();
   return { ok: true, buchung: id, betrag, aus };
 }
 
@@ -218,6 +257,7 @@ export function budgetAbrechnen(userId: string, id: string, ist: number, now = D
   if (z.stand !== null) z.stand -= ist * (echtGilt(z, now, c) ? 1 : c.pessimismus);
   z.verlauf.push({ at: now, e: ist }); z.verlauf = z.verlauf.filter((v) => now - v.at < 48 * 3_600_000);
   z.fehler = 0; z.breakerBis = 0;   // ein Lauf kam durch: Breaker zu
+  speichern();
 }
 
 /** 402/Energie-Fehler: Breaker mit Backoff (5, 10, 20 … höchstens 120 min). Der Schlüssel bleibt unberührt. */
@@ -226,6 +266,7 @@ export function budgetFehler(userId: string, now = Date.now(), env: Env = proces
   const c = budgetCfg(env), z = zust(userId, now, c);
   z.fehler += 1;
   z.breakerBis = now + Math.min(120, 5 * 2 ** (z.fehler - 1)) * 60_000;
+  speichern();
   return z.breakerBis;
 }
 
@@ -238,7 +279,10 @@ export function leseRouting(claudeFuenfH: number | null | undefined, vorher: 'cl
 let leseGlobal: 'claude' | 'melious' = 'melious';
 /** Zustand der Kopplung nachziehen (vom Ticker mit auslastung().fuenfH). */
 export function leseAktualisieren(claudeFuenfH: number | null | undefined, env: Env = process.env): 'claude' | 'melious' {
-  return leseGlobal = budgetAn(env) ? leseRouting(claudeFuenfH, leseGlobal, env) : 'melious';
+  const vorher = leseGlobal;
+  leseGlobal = budgetAn(env) ? leseRouting(claudeFuenfH, leseGlobal, env) : 'melious';
+  if (leseGlobal !== vorher) { for (const z of zustaende.values()) z.lese = leseGlobal; speichern(); }
+  return leseGlobal;
 }
 /** Dürfen Lese-Jobs jetzt auf Claude laufen? */
 export const leseAufClaude = (env: Env = process.env) => budgetAn(env) && leseGlobal === 'claude';
@@ -250,8 +294,9 @@ export function tagesAbgleich(userId: string, now = Date.now(), env: Env = proce
   if (!z || b.stunde < 8 || z.abgleichTag === b.tag) return { lief: false };
   z.abgleichTag = b.tag;
   const verbrauch = z.verlauf.filter((v) => now - v.at < 24 * 3_600_000).reduce((s, v) => s + v.e, 0), nachladung = c.nachladung * 24;
-  if (verbrauch > nachladung) { z.faktor = Math.max(0.5, z.faktor * 0.8); melder(userId, `Melious-Abgleich 08:00: Verbrauch ${Math.round(verbrauch)} > Nachladung ${nachladung} — Budget −20 % (Faktor ${z.faktor.toFixed(2)}).`); }
+  if (verbrauch > nachladung) { z.faktor = Math.max(0.5, z.faktor * 0.8); melde(userId, `Melious-Abgleich 08:00: Verbrauch ${Math.round(verbrauch)} > Nachladung ${nachladung} — Budget −20 % (Faktor ${z.faktor.toFixed(2)}).`, 'abgleich'); }
   else if (verbrauch < nachladung * 0.8) z.faktor = Math.min(1.5, z.faktor * 1.2);
+  speichern();
   return { lief: true, verbrauch, nachladung, faktor: z.faktor };
 }
 /** Ticker-Aufruf (sessions.ts, 60 s): Abgleich für alle bekannten Personen. */
