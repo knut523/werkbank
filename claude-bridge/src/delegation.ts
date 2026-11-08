@@ -214,8 +214,9 @@ export function run(cmd: string, args: string[], o: { cwd: string; env?: Record<
     let out = '';
     let killed = false;
     let p: ReturnType<typeof spawn>;
+    const grenze = Math.max(o.max ?? 0, 4_000_000);   // Streaming-Deckel: großzügiger Aufrufer-max gewinnt, sonst 4 MB (Speicher-Bremse)
     try { p = spawn(cmd, args, { cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e: any) { return resolve({ code: 127, out: String(e?.message ?? e) }); }
-    const add = (d: Buffer) => { out += d.toString('utf8'); if (out.length > 4_000_000) out = out.slice(-2_000_000); };
+    const add = (d: Buffer) => { out += d.toString('utf8'); if (out.length > grenze) out = out.slice(-grenze); };
     p.stdout!.on('data', add); p.stderr!.on('data', add);
     const timer = setTimeout(() => { killed = true; try { process.kill(-p.pid!, 'SIGKILL'); } catch { /* schon weg */ } }, o.timeoutMs ?? 30_000);
     p.on('error', (e: any) => { clearTimeout(timer); resolve({ code: 127, out: String(e?.message ?? e) }); });
