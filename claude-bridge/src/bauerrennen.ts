@@ -5,6 +5,7 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { FLASH, DEEPSEEK } from './modellwahl.ts';
+import type { Phase } from './strangpruefung.ts';
 import { starte, beenden, gruppeWeg } from './prozesse.ts';
 
 type Env = Record<string, string | undefined>;
@@ -106,7 +107,7 @@ export const DECKEL_LOG = 'deckel';
 export const abbruchFristMs = (env: Env = process.env) => { const n = Number(env.BRIDGE_ABBRUCH_FRIST_S); return Number.isFinite(n) && n > 0 ? n * 1000 : 30_000; };
 /** Das Bauen eines Bauern mit Zeitlimit: Überschreitung → Signal abgebrochen (OC2-interrupt), Ergebnis mit log 'deckel'. Zurück erst, wenn der Bauer
  *  den Abbruch bestätigt hat (Promise beendet) — danach darf sein Unter-Worktree entfernt werden. */
-async function mitDeckel(start: (signal: AbortSignal, vorbereitung: (v: Promise<unknown>) => void) => Promise<BauErgebnis>, bauer: string, ms: number, fristMs: number): Promise<BauErgebnis> {
+export async function mitDeckel(start: (signal: AbortSignal, vorbereitung: (v: Promise<unknown>) => void) => Promise<BauErgebnis>, bauer: string, ms: number, fristMs: number): Promise<BauErgebnis> {
   // Die Uhr misst das Bauen, nicht das Anlegen des Worktrees: meldet der Bauer eine Vorbereitung an (synchron beim Start), läuft der Deckel erst danach.
   let vorb: Promise<unknown> | undefined;
   const ac = new AbortController(), p = start(ac.signal, (v) => { vorb = v; });
@@ -187,7 +188,7 @@ export interface Deps {
   schnell(k: BauErgebnis, a: Auftrag): Promise<Schnell>;
   /** Voller Build + volle Tests, nur am Sieger (über den Semaphor). */
   voll?(k: BauErgebnis, a: Auftrag): Promise<{ ok: boolean; log: string }>;
-  ledger?(e: { id: string; bauer: string[]; sieger: string | null; abgelehnt: { bauer: string; grund: string }[] }): void;
+  ledger?(e: { id: string; bauer: string[]; sieger: string | null; abgelehnt: { bauer: string; grund: string }[]; /** L2: Phasenzeiten je Prüfrunde und Tail der Gate-Logs. */ phasen?: Phase[]; gateLog?: string[] }): void;
   jetzt?(): number;
 }
 export interface Lauf { auftrag: Auftrag; sieger: BauErgebnis | null; verlierer?: { bauer: string; diff: string; at: number; benutzt?: boolean }; fixrunden: number; logs: string[]; /** Alle Bauer über dem Zeitdeckel: der Punkt ist zu groß — zerlegen statt eskalieren. */
