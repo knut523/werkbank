@@ -54,6 +54,15 @@ test('Schutzzone im Auftrag → kein Rennen, Opus (ok:false); roter voller Lauf 
   rmSync(wurzel, { recursive: true, force: true });
 });
 
+test('Großer Sieger-Diff (> 20 KB) landet vollständig im Strang-Worktree', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const r = await bestofnStrang({ cwd, id: 'x8', prompt: 'ändere src/a.ts', env: {}, zug: zug({ [FLASH]: 1000, [DEEPSEEK]: 1000 }), pruefe });
+  assert.equal(r?.ok, true);
+  const inhalt = readFileSync(join(cwd, 'src/a.ts'), 'utf8');
+  assert.equal(inhalt, zeilen(1000), 'Diff > 4 KB wurde nicht abgeschnitten: Dateiinhalt im Strang identisch');
+  rmSync(wurzel, { recursive: true, force: true });
+});
+
 test('Sonnet-Klasse im Strang: Sonnetzone → ok:false mit Sonnet-Grund, kein Bauer gebaut; meliousLeer (userId) ebenso; Abschaltung', async () => {
   const { wurzel, cwd } = repo(); gebaut.length = 0;
   const z = await bestofnStrang({ cwd, id: 'x5', prompt: 'ändere src/kapazitaet.ts', env: {}, zug: zug({}), pruefe });

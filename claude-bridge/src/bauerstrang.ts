@@ -26,7 +26,7 @@ const pfade = (text: string) => [...new Set(text.match(/\.env[\w.]*|[\w.@-]+(?:\
 const kurz = (m: string) => m.replace(/[^\w]+/g, '-').slice(0, 24);
 const geschlossen = new Map<string, { cwd: string; lauf: Lauf; patch: string; patches: Record<string, string> }>();
 
-const git = (cwd: string, ...a: string[]) => run('git', ['-C', cwd, ...a], { cwd, max: 4000 });
+const git = (cwd: string, ...a: string[]) => run('git', ['-C', cwd, ...a], { cwd, max: 50_000_000, timeoutMs: 300_000 });
 async function anwenden(cwd: string, diff: string, rueck = false): Promise<boolean> {
   const dir = mkdtempSync(join(tmpdir(), 'bauer-patch-'));
   try { const f = join(dir, 'p.diff'); writeFileSync(f, diff.endsWith('\n') ? diff : diff + '\n'); return (await git(cwd, 'apply', '--binary', ...(rueck ? ['-R'] : []), f)).code === 0; }
