@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { wb } from './db.ts';
-import { schutzpfadGate } from './schutzpfade.ts';
+import { schutzpfadGate, geaenderteDateienArgs } from './schutzpfade.ts';
 import { reviewDir } from './bericht.ts';
 import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
@@ -666,7 +666,7 @@ async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix:
 /** `null` = nicht ermittelbar (git-Fehler): Aufrufer müssen dann SCHLIESSEN (fail closed), nie „keine Schutzdateien“ annehmen. */
 export async function fixDateien(f: any, neu: string, g: GitRun): Promise<string[] | null> {
   if (neu === f.head) return [];
-  try { return String(await g(['-c', 'core.quotepath=false', 'diff', '--name-only', f.head, neu], f.worktree)).split('\n').filter(Boolean); } catch { return null; }
+  try { return String(await g(geaenderteDateienArgs(f.head, neu), f.worktree)).split('\n').filter(Boolean); } catch { return null; }
 }
 
 async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, g: GitRun, deps: FixDeps, now: Date) {

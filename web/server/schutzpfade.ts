@@ -25,6 +25,11 @@ export function globRegex(g: string): RegExp {
   return new RegExp(`^${r}$`, 'i');
 }
 
+/** git-Argumente für „geänderte Dateinamen base..head“. IMMER hierüber (Schutzpfad-Prüfungen): ohne `--no-renames` listet git bei einer
+ *  Umbenennung nur den neuen Pfad, der geschützte Quellpfad (z. B. db/migrations/001.sql → archive/001.sql) bliebe unsichtbar. */
+export const geaenderteDateienArgs = (base: string, head: string): string[] =>
+  ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', base, head];
+
 /** Welche der Dateien (Pfade relativ zum Repo) liegen in einem Schutzpfad? */
 export function schutzTreffer(dateien: string[], env: Env = process.env): string[] {
   if (!schutzAn(env)) return [];
