@@ -50,7 +50,8 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
     // R30 (Punkt 4): Die Basis ist nicht mehr hart `dev` — fuehreAus bestimmt sie aus dem PR bzw. origin/HEAD.
     // `base` bleibt hier nur als ausdrücklicher Hinweis (optional), geprüft wird der ermittelte Wert.
     if (a.base !== undefined && a.base !== '' && !zweigOk(a.base)) return { fehler: 'base: ungültiger Zielzweig für das Gate.' };
-    return { art: 'push', repo, zweig: String(a.zweig), klon, base: a.base === undefined || a.base === '' ? '' : String(a.base), ...(a.schutzGo === true || a.schutzGo === 'true' ? { schutzGo: true } : {}) };
+    // Sicherheit: schutzGo aus der Agent-Eingabe wird NIE übernommen — ein Go kommt nur aus dem UI-Weg, der die Schutzdateien zeigt.
+    return { art: 'push', repo, zweig: String(a.zweig), klon, base: a.base === undefined || a.base === '' ? '' : String(a.base) };
   }
   // R30 (Plan 376): @fix freigeben/ablehnen — gebunden an Repo, Fix-Kennung und den geprüften SHA. Der Push selbst
   // läuft nicht hier (Tests und Gate dauern Minuten), sondern im fixTick; hier wird nur die billige Prüfung und die
@@ -62,7 +63,7 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
     if (a.art === 'fix_freigeben') {
       const neu = String(a.neu ?? '').trim();
       if (!/^[0-9a-f]{40}$/.test(neu)) return { fehler: 'neu: SHA des geprüften Stands fehlt (aus der Freigabe-Frage).' };
-      return { art: 'fix_freigeben', repo, fix, neu, ...(a.schutzGo === true || a.schutzGo === 'true' ? { schutzGo: true } : {}) };
+      return { art: 'fix_freigeben', repo, fix, neu };
     }
     const grund = String(a.grund ?? '').trim();
     return { art: 'fix_ablehnen', repo, fix, ...(grund ? { grund: grund.slice(0, 500) } : {}) };

@@ -4122,7 +4122,7 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
       schutz: async (x) => {
         const gitq = (args: string[]) => promisify(execFile)('git', ['-C', x.klon, ...args], { timeout: 20_000, encoding: 'utf8' }).then((r) => r.stdout.trim());
         let dateien: string[] = [];
-        try { const mb = await gitq(['merge-base', x.sha, `origin/${x.base}`]); dateien = (await gitq(['diff', '--name-only', mb, x.sha])).split('\n').filter(Boolean); } catch { return { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff gegen die Basis nicht ermittelbar)' }; }
+        try { const mb = await gitq(['merge-base', x.sha, `origin/${x.base}`]); dateien = (await gitq(['-c', 'core.quotepath=false', 'diff', '--name-only', mb, x.sha])).split('\n').filter(Boolean); } catch { return { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff gegen die Basis nicht ermittelbar)' }; }
         return schutzpfadGate({ strand: `push:${x.repo}#${x.nummer ?? x.zweig}`, titel: `Push ${x.zweig}`, key: x.repo, head: x.sha, dateien, schutzGo: x.schutzGo });
       },
       // D2: Nachweis bei der Brücke (dort hat Knut die Karte bestätigt); Brücke weg oder anderer Fehler = kein Nachweis.

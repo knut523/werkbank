@@ -369,3 +369,23 @@ test('schutzpfadGate: harmloser Diff frei; ohne Treffer keine Endprüfung angeme
   assert.equal(r.ok, true); assert.deepEqual(r.treffer, []);
   assert.equal(await raw.db(process.env.WERKBANK_DB).collection('endpruefungen').countDocuments({ strand: 'x-harmlos' }), 0);
 });
+
+test('Schutzpfad Gate geschlossen: leere frage.dateien bei geschütztem Diff wird neu berechnet; git-Fehler sperrt', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-sp2', 'feat/s2', 42);
+  await einreihen('sp2', 'olaf-sp2', 42);
+  await T.fixesCol().updateOne({ _id: 'fix:sp2' as any }, { $set: { frage: true } });
+  const { d } = deps(gh, { zweig: 'feat/s2', strangDatei: 'db/migrations/002_x.sql' });
+  await F.fixTick(d); await F.fixTick(d);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:sp2' as any });
+  assert.equal(f.status, 'freigabe_frage');
+  // git-Fehler beim Merken der Frage hinterlässt []: darf nicht als „keine Schutzdateien“ gelten.
+  await T.fixesCol().updateOne({ _id: f._id }, { $set: { 'frage.dateien': [] } });
+  const r1 = await F.freigabeSetzen('fix:sp2', f.neu, 'u1', NOW, { schutzGo: true });
+  assert.equal(r1.ok, false); assert.match(r1.grund!, /Opus-Endprüfung/, 'Liste neu berechnet, Schutzpfad erkannt');
+  assert.equal((await T.fixesCol().findOne({ _id: f._id }) as any).freigabe, undefined, 'keine Marke');
+  // Diff nicht ermittelbar → gesperrt.
+  await T.fixesCol().updateOne({ _id: f._id }, { $set: { worktree: join(T0, 'gibt-es-nicht') } });
+  const r2 = await F.freigabeSetzen('fix:sp2', f.neu, 'u1', NOW, { schutzGo: true });
+  assert.equal(r2.ok, false); assert.match(r2.grund!, /nicht prüfbar/);
+});

@@ -47,7 +47,7 @@ export function patchId(g: GitFn, dir: string, base: string, head: string): stri
   return out ? out.split(/\s+/)[0] || null : null;
 }
 
-export interface RepoFakten { dir: string; key: string | null; branch: string | null; head: string; clean: boolean; dirty: string[]; baseRef: string | null; mergeBase: string | null; commits: { sha: string; subject: string }[]; more: number; stat: string; patchId: string | null; dateien: string[] }
+export interface RepoFakten { dir: string; key: string | null; branch: string | null; head: string; clean: boolean; dirty: string[]; baseRef: string | null; mergeBase: string | null; commits: { sha: string; subject: string }[]; more: number; stat: string; patchId: string | null; dateien: string[]; dateienOk: boolean }
 
 /** Was freigegeben würde (rein bis auf git, testbar mit einem git-Ersatz). */
 export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
@@ -67,7 +67,8 @@ export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
     commits: all.slice(0, 30), more: Math.max(0, all.length - 30),
     stat: mergeBase ? (tryGit(g, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--stat=100', '--stat-count=40', mergeBase, 'HEAD'], dir) ?? '') : '',
     patchId: mergeBase ? patchId(g, dir, mergeBase, 'HEAD') : null,
-    dateien: mergeBase ? (tryGit(g, ['diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) ?? '').split('\n').filter(Boolean) : [],
+    dateienOk: mergeBase ? tryGit(g, ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) !== null : true,
+    dateien: mergeBase ? (tryGit(g, ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) ?? '').split('\n').filter(Boolean) : [],
   };
 }
 
@@ -266,6 +267,7 @@ export async function freigeben(u: User, d: any, seen: { head?: string; patchId?
   if (!f.key) throw err(409, 'Repo ohne origin — so lässt sich nichts freigeben.');
   if (!f.mergeBase || !f.patchId) throw err(409, 'Keine Basis (origin/develop|dev|main) oder leerer Diff — nichts freizugeben.');
   if (String(seen.head ?? '') !== f.head || (seen.patchId ?? null) !== f.patchId) throw err(409, 'Der Stand hat sich inzwischen geändert — Seite neu laden und noch einmal ansehen.');
+  if (!f.dateienOk) throw err(409, 'Schutzpfade nicht prüfbar (Dateiliste des Diffs nicht lesbar) — nichts freigegeben.');
   const da: any = await freigaben().findOne({ strand: String(d._id), key: f.key, branch: f.branch, head: f.head, revokedAt: null });
   if (da) return publicFreigabe(da);
   // Paket G: Schutzpfade — Opus-Endprüfung (gesammelt vor der Push-Welle) und Knuts ausdrückliches Go, bevor irgendetwas freigegeben wird.
