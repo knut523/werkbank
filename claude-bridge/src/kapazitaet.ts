@@ -130,7 +130,7 @@ function speichern() {
   if (!datei) return;
   try {
     const out: Record<string, any> = {};
-    for (const [u, z] of zustaende) out[u] = Object.fromEntries(FELDER.map((f) => [f, (z as any)[f]]));
+    for (const [u, z] of zustaende) out[u] = { ...Object.fromEntries(FELDER.map((f) => [f, (z as any)[f]])), offen: [...z.offen.values()] };
     writeFileSync(datei + '.tmp', JSON.stringify({ v: 1, zustaende: out }));
     renameSync(datei + '.tmp', datei);
   } catch { /* Platte voll o. ä.: der Speicher läuft weiter */ }
@@ -152,6 +152,7 @@ function zust(userId: string, now: number, c: Cfg): Zustand {
       z.eimer = Math.min(c.burst, num(g.eimer, c.burst / 2)); z.eimerAt = Math.min(now, num(g.eimerAt, now)); z.reserve = Math.min(c.reserve, num(g.reserve, c.reserve / 2));
       z.stand = typeof g.stand === 'number' && Number.isFinite(g.stand) ? g.stand : null; z.standAt = Math.min(now, num(g.standAt, now)); z.echt = g.echt === true; z.echtAt = num(g.echtAt, 0); z.topf = num(g.topf, c.topf);
       z.ledger = g.ledger && typeof g.ledger === 'object' ? g.ledger : {}; z.verlauf = Array.isArray(g.verlauf) ? g.verlauf.filter((v: any) => typeof v?.at === 'number' && typeof v?.e === 'number') : [];
+      if (Array.isArray(g.offen)) for (const o of g.offen) if (o && typeof o.id === 'string' && istJobtyp(o.jobtyp) && typeof o.betrag === 'number' && Number.isFinite(o.betrag) && (o.aus === 'eimer' || o.aus === 'reserve') && typeof o.at === 'number' && Number.isFinite(o.at)) z.offen.set(o.id, { id: o.id, jobtyp: o.jobtyp, betrag: o.betrag, aus: o.aus, at: o.at });
       z.pause = g.pause === true; z.fehler = num(g.fehler, 0); z.breakerBis = num(g.breakerBis, 0); z.faktor = Math.min(1.5, Math.max(0.5, num(g.faktor, 1))); z.abgleichTag = typeof g.abgleichTag === 'string' ? g.abgleichTag : ''; z.lese = g.lese === 'claude' ? 'claude' : 'melious';
     }
     zustaende.set(userId, z);
