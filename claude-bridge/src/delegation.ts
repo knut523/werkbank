@@ -249,7 +249,7 @@ export async function pruefBefehle(dir: string, fest?: { ref: string; sha: strin
 
 export interface PruefErgebnis { name: string; befehl: string; ok: boolean; code: number; ausgabe: string; ms: number }
 /** Führt die Prüfbefehle im Unter-Worktree aus (Umgebung ohne Geheimnisse; Zeitlimit je Befehl). Plus `git diff --check`. */
-export async function pruefen(dir: string, base: string, env: Record<string, string | undefined>, o: { fest?: { ref: string; sha: string } | null; maxMs?: number } = {}): Promise<{ eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] }> {
+export async function pruefen(dir: string, base: string, env: Record<string, string | undefined>, o: { fest?: { ref: string; sha: string } | null; maxMs?: number; nur?: (name: string) => boolean } = {}): Promise<{ eingerichtet: boolean; ref: string | null; ergebnisse: PruefErgebnis[] }> {
   const cfg = await pruefBefehle(dir, o.fest);
   const list = cfg?.list;
   const ende = Date.now() + (o.maxMs ?? Infinity);
@@ -257,7 +257,7 @@ export async function pruefen(dir: string, base: string, env: Record<string, str
   const t0 = Date.now();
   const check = await git(dir, 'diff', '--check', `${base}..HEAD`);
   out.push({ name: 'diff-check', befehl: 'git diff --check', ok: check.code === 0, code: check.code, ausgabe: check.out.trim().slice(-KAPPUNG.pruefAusgabe), ms: Date.now() - t0 });
-  for (const p of list ?? []) {
+  for (const p of (list ?? []).filter((x) => !o.nur || o.nur(x.name))) {
     const t = Date.now();
     const cwd = p.ordner ? join(dir, p.ordner) : dir;
     const befehl = p.befehl.join(' ');
