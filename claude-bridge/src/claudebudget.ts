@@ -128,7 +128,7 @@ const resets = new Map<string, number>();
 export const resetNotieren = (id: string, until: number) => { resets.set(id, until); speichern(); };
 export const _resetVon = (id: string) => resets.get(id) ?? null;
 /** Nur für Tests. */
-export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); datei = null; };
+export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); meliousFrei.clear(); datei = null; };
 
 // ---------- 5. alle Konten heiß ----------
 export type Verteilung =
@@ -223,7 +223,7 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
   return o.profil === 'leser' ? 'leser' : 'bauer';
 }
 const meliousFrei = new Map<string, boolean>();
-/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Alter Aufruf ohne userId (boolean) gilt prozessweit weiter. */
+/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Alter Aufruf ohne userId (boolean) gilt prozessweit weiter; eine Person ohne eigenen Eintrag fällt ebenfalls darauf zurück. */
 export const setzeMelious = (userId: string | boolean, frei?: boolean) => { meliousFrei.set(typeof userId === 'boolean' ? '' : userId, typeof userId === 'boolean' ? userId : frei === true); };
 
 /** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
@@ -259,7 +259,7 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
   }
   const konten = [...lagen.values()];
   if (!konten.length) return '';
-  const melOk = (o.userId !== undefined ? meliousFrei.get(o.userId) : meliousFrei.get('')) ?? false;
+  const melOk = (o.userId !== undefined ? (meliousFrei.get(o.userId) ?? meliousFrei.get('')) : meliousFrei.get('')) ?? false;
   const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: melOk ? { modell: 'melious' } : null, now });
   return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
 }
