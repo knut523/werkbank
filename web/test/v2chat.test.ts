@@ -110,3 +110,48 @@ test('S22: Vorlage im 2.0-Chat — gewählter Vorlagentext geht als System-Nachr
   assert.ok((await chat.meineChats({ ...u, id: 'u-vorlage' } as any)).some((c: any) => c.vorlage === 'vorlage-spec'));
   void r3;
 });
+
+// ---- Paket G: Anhänge und Modellwahl ----
+test('Anhänge: nur Basename, Größen- und Anzahllimit, Datei-Teile an die Brücke; Abschaltung', async () => {
+  const b64 = (s: string) => Buffer.from(s).toString('base64');
+  const a = chat.pruefeAnhaenge([{ name: '../../etc/pass wd.pdf', mime: 'application/pdf', daten: b64('x') }]);
+  assert.equal(a[0].name, 'pass wd.pdf', 'Pfadanteile fallen weg');
+  assert.throws(() => chat.pruefeAnhaenge([1, 2, 3, 4].map((i) => ({ name: `a${i}.txt`, mime: 'text/plain', daten: b64('x') }))), (e: any) => e.status === 413);
+  assert.throws(() => chat.pruefeAnhaenge([{ name: 'a.txt', mime: 'text/plain', daten: b64('x'.repeat(2048)) }], { WERKBANK_V2_ANHANG_MB: '0.001' }), (e: any) => e.status === 413);
+  assert.throws(() => chat.pruefeAnhaenge([{ name: 'a.txt', mime: 'text/plain', daten: b64('x') }], { WERKBANK_V2_ANHANG: 'aus' }), (e: any) => e.status === 400);
+  assert.throws(() => chat.pruefeAnhaenge([{ name: '', daten: b64('x') }]), (e: any) => e.status === 400);
+  // Ende zu Ende: der Zug schickt Text + file-Teil an die Brücke, die Nachricht merkt sich nur den Namen
+  const br = bruecke(); br.los();
+  const uA = { ...u, id: 'u-anhang' };
+  const r = await chat.senden(uA, { text: 'Lies das', anhaenge: [{ name: 'dir/a b.txt', mime: 'text/plain', daten: b64('hallo') }] }, { bridgeUrl: 'http://bruecke', token: async () => 't', fetch: br.f });
+  const inhalt = br.aufrufe[0].body.messages.at(-1).content;
+  assert.equal(inhalt[0].text, 'Lies das');
+  assert.equal(inhalt[1].file.filename, 'a b.txt');
+  assert.match(inhalt[1].file.file_data, /^data:text\/plain;base64,aGFsbG8=$/);
+  await bis(async () => (await chat.verlauf(uA, r.conv)).some((n) => n.status === 'fertig' && n.rolle === 'assistent'));
+  assert.deepEqual((await chat.verlauf(uA, r.conv))[0].anhaenge, ['a b.txt']);
+});
+
+test('Modellwahl je Chat: gespeichert, an die Brücke durchgereicht, später änderbar, ungültig → 400, Abschaltung', async () => {
+  const uM = { ...u, id: 'u-modell' };
+  const b1 = bruecke(); b1.los();
+  const deps = (br: any) => ({ bridgeUrl: 'http://bruecke', token: async () => 't', fetch: br.f });
+  const r = await chat.senden(uM, { text: 'eins', modell: 'opus' }, deps(b1));
+  assert.equal(b1.aufrufe[0].body.model, 'claude-code-opus');
+  await bis(async () => (await chat.verlauf(uM, r.conv)).some((n) => n.status === 'fertig' && n.rolle === 'assistent'));
+  assert.equal((await chat.meineChats(uM))[0].modell, 'opus');
+  // ohne Angabe: der gespeicherte Wert gilt weiter
+  const b2 = bruecke(); b2.los();
+  await chat.senden(uM, { text: 'zwei', conv: r.conv }, deps(b2));
+  assert.equal(b2.aufrufe[0].body.model, 'claude-code-opus');
+  await bis(async () => (await chat.verlauf(uM, r.conv)).filter((n) => n.status === 'fertig' && n.rolle === 'assistent').length === 2);
+  // Wechsel
+  const b3 = bruecke(); b3.los();
+  await chat.senden(uM, { text: 'drei', conv: r.conv, modell: 'haiku' }, deps(b3));
+  assert.equal(b3.aufrufe[0].body.model, 'claude-code-haiku');
+  await bis(async () => (await chat.verlauf(uM, r.conv)).filter((n) => n.status === 'fertig' && n.rolle === 'assistent').length === 3);
+  await assert.rejects(chat.senden(uM, { text: 'x', conv: r.conv, modell: 'gpt' }, deps(bruecke())), (e: any) => e.status === 400);
+  const b0 = bruecke(); b0.los();
+  await chat.senden({ ...u, id: 'u-modell2' }, { text: 'ohne' }, deps(b0));
+  assert.equal(b0.aufrufe[0].body.model, 'claude-code', 'ohne Wahl: Vorgabe wie bisher');
+});

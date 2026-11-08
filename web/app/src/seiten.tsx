@@ -456,7 +456,12 @@ export function Freigabe({ id }: { id: string }) {
     if (r.fehler !== undefined) return;
     setLaeuft(true); setMeldung(null);
     try { await schicke(`api/review/${id}/freigabe`, { head: r.head, patchId: r.patchId }); setMeldung('Freigegeben — der Unter-Chat lädt genau diesen Stand jetzt nach GitHub hoch (nach einer letzten Prüfung).'); neu(); }
-    catch (e: any) { setMeldung(String(e?.message ?? e)); } finally { setLaeuft(false); }
+    catch (e: any) {
+      // Paket G: Schutzpfade — Opus-Endprüfung ist grün, jetzt Knuts ausdrückliches Go für genau diese Dateien
+      if (/\(schutzGo\)/.test(String(e?.message)) && window.confirm(`${String(e.message)}\n\nJa, genau diese Dateien freigeben?`)) {
+        try { await schicke(`api/review/${id}/freigabe`, { head: r.head, patchId: r.patchId, schutzGo: true }); setMeldung('Freigegeben (Schutzpfade mit deinem Go).'); neu(); } catch (e2: any) { setMeldung(String(e2?.message ?? e2)); }
+      } else setMeldung(String(e?.message ?? e));
+    } finally { setLaeuft(false); }
   };
   const zurueck = async (fid: string) => {
     if (laeuft) return;   // Phase 4: kein zweiter Klick, solange der erste läuft

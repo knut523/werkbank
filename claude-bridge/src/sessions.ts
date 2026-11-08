@@ -18,6 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
+import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, speichereStand } from './uebergabe.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
@@ -462,6 +463,11 @@ export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: Permis
 // end: wie die letzte Runde endete (ok · max_turns · timeout · error · limit · frage_verfallen) — die Werkbank zeigt
 // alles außer „ok“ als „hängt“, nie als „bereit zum Review“ (Plan Heute + Review-Schlange, K1).
 // roundAt: Beginn der letzten echten Runde (eine Antwort auf eine Rückfrage setzt dieselbe Runde fort).
+/** Paket G: je Chat Kontextgröße der letzten Antwort, deren Text und die erste Nachricht (nur im Speicher; nach Neustart der Brücke beginnt die Zählung neu). */
+const uebergabeFile = join(cfg.stateDir, 'session-uebergabe.json');
+const uebergabeMap = ladeStand(uebergabeFile);   // in der Session-Ablage (stateDir) persistiert: Neustart zählt weiter
+const saveUebergabe = () => { try { speichereStand(uebergabeFile, uebergabeMap); } catch { /* Ablage nicht beschreibbar: Zähler bleibt im Speicher */ } };
+const uebergabeStand = { get: (k: string) => uebergabeMap[k], has: (k: string) => k in uebergabeMap, set: (k: string, v: (typeof uebergabeMap)[string]) => { uebergabeMap[k] = v; saveUebergabe(); } };
 const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[]; end?: string; roundAt?: number }>();
 
 /** Rundenende merken; ein „ok“ überschreibt kein früheres Problem derselben Runde (z. B. verfallene Rückfrage). */
@@ -965,6 +971,11 @@ function handleMessage(live: Live, msg: any) {
       return;
     }
     case 'assistant': {
+      if (!msg.parent_tool_use_id && !msg.error) {   // Paket G: Kontextgröße und letzte Antwort für die automatische Übergabe
+        const ctx = kontextVon(msg.message?.usage);
+        const u = uebergabeStand.get(live.key);
+        if (ctx && u && u.ctx !== ctx) { u.ctx = ctx; saveUebergabe(); }
+      }
       if (live.melious) meliousCall(live, msg);
       if (!live.modelSeen && !msg.parent_tool_use_id && typeof msg.message?.model === 'string' && !msg.message.model.startsWith('<')) live.modelSeen = msg.message.model.slice(0, 80);
       if (live.melious && msg.error && meliousExhaustedError(msg.error, msgText(msg))) {
@@ -993,6 +1004,7 @@ function handleMessage(live: Live, msg: any) {
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           live.progressed = true;
+          { const u = uebergabeStand.get(live.key); if (u) { u.letzte = String(block.text ?? '').slice(-4000); saveUebergabe(); } }
           emitModelText(live, block.text);
         }
       }
@@ -1647,7 +1659,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (live.worker && live.guard) live.guard = { ...live.guard, strict: true };
   try { await ensureHome(home); } catch (e: any) { log('konfig fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
   // Fortsetzen nur in derselben Konfiguration — dort liegt der Verlauf der Sitzung; sonst neu mit dem Verlauf aus LibreChat.
-  const resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
+  let resume = sessionMap[key] && (homeMap[key] ?? 'shared') === live.home ? sessionMap[key] : undefined;
+  // Paket G: Kontext ≥ Grenze → frische Sitzung mit Statusblock statt Fortsetzen (Hauptchat, Stränge, eigene Chats — eine Stelle).
+  if (!uebergabeStand.has(key)) uebergabeStand.set(key, { ctx: 0, letzte: '', erst: req.prompt.slice(0, 4000) });
+  const ust = uebergabeStand.get(key)!;
+  let uebergabeBlock: string | null = null;
+  if (!live.worker && resume && sollUebergeben(ust.ctx)) {
+    uebergabeBlock = statusblock({ auftrag: orchMap[key]?.auftrag || ust.erst, letzte: ust.letzte, dateien: lastSeen.get(key)?.written ?? [], ctx: ust.ctx });
+    emitStatus(live, uebergabeHinweis(ust.ctx));
+    log('uebergabe kontext', { conv: key, ctx: ust.ctx, uebergabe: (ust.n ?? 0) + 1 });
+    delete sessionMap[key]; saveMap();
+    resume = undefined; ust.ctx = 0; ust.n = (ust.n ?? 0) + 1; saveUebergabe();
+  }
   // Strang-Auftrag für neue Phasen (Plan 165, S3): die erste Nachricht des Strangs; ältere Stränge: erste Nachricht im Verlauf.
   // Ein angemeldeter Wechsel gilt nur im Zug, der ihn angemeldet hat (abgebrochener Zug → verfällt).
   if (live.orch && !live.worker && orchMap[key]?.phaseNeu) { delete orchMap[key].phaseNeu; saveMap(); }
@@ -1658,7 +1681,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Neue Sitzung: Verlauf aus LibreChat und Vorgabe der Vorlage vor die Nachricht (auch nach einem Anbieterwechsel, s. u.).
   // Nach einem Phasenwechsel in diesem Zug (Plan 165) beginnt jede neue Sitzung — auch nach Konto-/Anbieterwechsel — mit
   // Auftrag + Übergabe, nie mit dem Chatverlauf.
-  let phaseFresh: string | null = null;
+  let phaseFresh: string | null = uebergabeBlock ? `${uebergabeBlock}\n\n## Neue Nachricht\n\n${req.prompt}` : null;
   const freshPrompt = (note = '') => {
     if (phaseFresh) return req.instructions ? `Vorgabe für diesen Chat (aus der gewählten Vorlage):\n${req.instructions}\n\n---\n\n${note}${phaseFresh}` : `${note}${phaseFresh}`;
     const p = req.history

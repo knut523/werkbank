@@ -807,11 +807,12 @@ export function registerV2(on0: On, d: V2Deps) {
     const conv = url.searchParams.get('conv');
     const liste = await eigen.meineChats(u);
     const nachrichten = conv ? await eigen.verlauf(u, conv, url.searchParams.get('seit') ?? undefined) : [];
-    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft'), vorlagen: (d.vorlagen?.() ?? []).map((v) => ({ name: v.name, label: v.label, beschreibung: v.beschreibung })) });
+    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft'), vorlagen: (d.vorlagen?.() ?? []).map((v) => ({ name: v.name, label: v.label, beschreibung: v.beschreibung })),
+      funktionen: { anhang: eigen.anhangAn(), modellwahl: eigen.modellwahlAn(), modelle: Object.entries(eigen.MODELLE).map(([wert, m]) => ({ wert, label: m.label })), anhangMaxMb: Math.round(eigen.anhangMaxBytes() / 1048576) } });
   });
   on('POST', /^\/api\/v2\/chat$/, async (req, res) => {
     const u = await d.needUser(req);
-    const b = await d.body(req, 64 * 1024);
+    const b = await d.body(req, eigen.anhangAn() ? 12 * 1024 * 1024 : 64 * 1024);   // Paket G: Anhänge als Base64 (Brücke nimmt höchstens 10 MB)
     if (b.ziel === 'hauptchat') {
       if (!admin(u)) throw err(403, 'Den Hauptchat führt nur Knut.');
       const text = eigen.pruefeText(b.text);
@@ -840,7 +841,7 @@ export function registerV2(on0: On, d: V2Deps) {
     // S22: Vorlage nur per Name — der Text kommt vom Server (librechat.yaml), nie vom Client.
     const v = b.vorlage ? (d.vorlagen?.() ?? []).find((x) => x.name === String(b.vorlage)) : null;
     if (b.vorlage && !v) throw err(400, 'Diese Vorlage gibt es nicht.');
-    const r = await eigen.senden(u, { text: b.text, conv: b.conv, vorlage: v ? { name: v.name, prefix: v.prefix } : null }, { bridgeUrl: d.bridgeUrl, token: d.claudeToken, log: d.log });
+    const r = await eigen.senden(u, { text: b.text, conv: b.conv, vorlage: v ? { name: v.name, prefix: v.prefix } : null, modell: b.modell, anhaenge: b.anhaenge }, { bridgeUrl: d.bridgeUrl, token: d.claudeToken, log: d.log });
     send(d, res, { ok: true, ziel: 'eigen', ...r });
   });
 }

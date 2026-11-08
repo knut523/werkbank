@@ -48,7 +48,7 @@ function fakeGithub(name: string, zweig: string, n: number) {
   return { gh, bare, kopf: () => git(['rev-parse', `refs/heads/${zweig}`], bare) };
 }
 
-function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?: string; base?: string; gate?: number; testsRot?: boolean; strangAendert?: boolean } = {}) {
+function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?: string; base?: string; gate?: number; testsRot?: boolean; strangAendert?: boolean; strangDatei?: string } = {}) {
   const calls = { status: [] as string[], kommentar: [] as string[], melde: [] as string[], push: 0, started: 0 };
   const d: any = {
     userById: async (id: string) => (id === 'u1' ? { id: 'u1' } : null),
@@ -59,8 +59,11 @@ function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?:
       calls.started++;
       const paket = /Paket: `([^`]+)`/.exec(inp.prompt)![1];
       if (o.strangAendert !== false) {
-        writeFileSync(join(inp.cwd, 'a.ts'), 'export const bar = 1;\n');
-        git(['commit', '-qam', 'fix: rename foo to bar'], inp.cwd);
+        const dat = o.strangDatei ?? 'a.ts';
+        mkdirSync(join(inp.cwd, dat, '..'), { recursive: true });
+        writeFileSync(join(inp.cwd, dat), 'export const bar = 1;\n');
+        git(['add', '-A'], inp.cwd);
+        git(['commit', '-qm', 'fix: rename foo to bar'], inp.cwd);
         writeFileSync(join(paket, 'fix.json'), JSON.stringify({ kurz: 'Renamed foo to bar.', tests: 'npm test', punkte: [{ punkt: 'rename foo', stand: 'fixed', commit: git(['rev-parse', 'HEAD'], inp.cwd).slice(0, 7), beleg: 'a.ts:1' }] }));
       }
       return { id: 'strang1' };
@@ -304,4 +307,65 @@ test('Endlos-Schutz: freigabe_frage ohne Marke, trocken, abgelehnt, fertig — f
   assert.equal((await T.fixesCol().findOne({ _id: 'fix:fr7' as any })).status, 'abgelehnt');
   assert.equal((await T.fixesCol().findOne({ _id: 'fix:fr8' as any })).status, 'fertig');
   assert.equal(calls.push, 0); assert.equal(calls.started, 0);
+});
+
+// ---------- Paket G: Schutzpfade in allen Freigabe-/Push-Wegen der Fix-Pipeline ----------
+
+test('Schutzpfad Weg freigabeSetzen: ohne Opus-Urteil abgewiesen, mit Urteil ohne Go abgewiesen, mit beidem Marke + Push', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-sp1', 'feat/s1', 41);
+  await einreihen('sp1', 'olaf-sp1', 41);
+  await T.fixesCol().updateOne({ _id: 'fix:sp1' as any }, { $set: { frage: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/s1', strangDatei: 'db/migrations/001_x.sql' });
+  await F.fixTick(d); await F.fixTick(d);
+  let f: any = await T.fixesCol().findOne({ _id: 'fix:sp1' as any });
+  assert.equal(f.status, 'freigabe_frage');
+  assert.deepEqual(f.frage.dateien, ['db/migrations/001_x.sql'], 'Dateien der Frage gemerkt');
+  const r1 = await F.freigabeSetzen('fix:sp1', f.neu, 'u1', NOW, { schutzGo: true });
+  assert.equal(r1.ok, false); assert.match(r1.grund!, /Opus-Endprüfung/, 'Go allein reicht nicht');
+  const ep: any = await raw.db(process.env.WERKBANK_DB).collection('endpruefungen').findOne({ strand: 'fix:sp1', head: f.neu });
+  assert.ok(ep, 'Endprüfung angemeldet');
+  assert.equal(await (await import('../server/schutzpfade.ts')).endpruefungUrteil(ep._id, 'ok', 'opus'), true);
+  const r2 = await F.freigabeSetzen('fix:sp1', f.neu, 'u1', NOW);
+  assert.equal(r2.ok, false); assert.match(r2.grund!, /schutzGo/, 'Urteil allein reicht nicht');
+  assert.equal(calls.push, 0);
+  assert.equal((await F.freigabeSetzen('fix:sp1', f.neu, 'u1', NOW, { schutzGo: true })).ok, true);
+  await F.fixTick(d);
+  f = await T.fixesCol().findOne({ _id: 'fix:sp1' as any });
+  assert.equal(f.status, 'fertig'); assert.equal(calls.push, 1);
+});
+
+test('Schutzpfad Weg Push im Auto-Modus: kein Auto-Push, der Fix fällt in die Freigabe-Frage', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-sp2', 'feat/s2', 42);
+  await einreihen('sp2', 'olaf-sp2', 42);
+  await T.fixesCol().updateOne({ _id: 'fix:sp2' as any }, { $set: { auto: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/s2', strangDatei: '.github/workflows/ci.yml' });
+  await F.fixTick(d); await F.fixTick(d);
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:sp2' as any });
+  assert.equal(calls.push, 0, 'nichts gepusht');
+  assert.equal(f.status, 'freigabe_frage');
+  assert.match(calls.melde.at(-1)!, /Schutzpfade berührt/);
+});
+
+test('Schutzpfad Weg Freigabe-Lauf (letzte Schranke): Marke ohne schutzGo direkt in der DB → kein Push, Marke fällt', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-sp3', 'feat/s3', 43);
+  await einreihen('sp3', 'olaf-sp3', 43);
+  await T.fixesCol().updateOne({ _id: 'fix:sp3' as any }, { $set: { frage: true } });
+  const { d, calls } = deps(gh, { zweig: 'feat/s3', strangDatei: 'server/auth/token.ts' });
+  await F.fixTick(d); await F.fixTick(d);
+  let f: any = await T.fixesCol().findOne({ _id: 'fix:sp3' as any });
+  await T.fixesCol().updateOne({ _id: 'fix:sp3' as any }, { $set: { freigabe: { at: NOW, neu: f.neu, zweig: f.zweig, pr: 43, von: 'u1' } } });   // Umgehung der Setz-Funktion
+  await F.fixTick(d);
+  f = await T.fixesCol().findOne({ _id: 'fix:sp3' as any });
+  assert.equal(calls.push, 0); assert.equal(f.status, 'freigabe_frage'); assert.equal(f.freigabe, undefined);
+  assert.match(calls.melde.at(-1)!, /Nicht gepusht: Schutzpfade/);
+});
+
+test('schutzpfadGate: harmloser Diff frei; ohne Treffer keine Endprüfung angemeldet', async () => {
+  const S2 = await import('../server/schutzpfade.ts');
+  const r = await S2.schutzpfadGate({ strand: 'x-harmlos', titel: 't', key: 'k', head: 'h', dateien: ['src/a.ts'] });
+  assert.equal(r.ok, true); assert.deepEqual(r.treffer, []);
+  assert.equal(await raw.db(process.env.WERKBANK_DB).collection('endpruefungen').countDocuments({ strand: 'x-harmlos' }), 0);
 });

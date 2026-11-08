@@ -8,8 +8,8 @@ import { Md, useDaten } from './teile.tsx';
 import { ohneStatuszeilen, wann } from './format.ts';
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
-interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null }
-interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null }[]; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
+interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null; anhaenge?: string[] }
+interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null; modell?: string }[]; funktionen?: { anhang: boolean; modellwahl: boolean; modelle: { wert: string; label: string }[]; anhangMaxMb: number }; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
 
 /** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank —
  *  Release 2.0: mit dem Übergabe-Entwurf (offene Unter-Chats, Rückfragen, Entscheidungen), sonst lehnt der Server mit 400 ab. */
@@ -32,6 +32,8 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   const [conv, setConv] = useState<string | null>(null);
   const [stand, setStand] = useState<Stand | null>(null);
   const [text, setText] = useState('');
+  const [modell, setModell] = useState('');   // Paket G: Modell je Chat (leer = Vorgabe); bei einem bestehenden Chat der gespeicherte Wert
+  const [dateien, setDateien] = useState<{ name: string; mime: string; daten: string }[]>([]);
   const [vorlage, setVorlage] = useState('');   // S22: Vorlage für einen neuen 2.0-Chat
   const [sendet, setSendet] = useState(false);
   const unterwegs = useRef(false);
@@ -44,6 +46,19 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   useEffect(() => { if (offen && convWahl) { setUnter(false); setZiel('eigen'); setConv(convWahl); } }, [offen, convWahl]);   // S12: aus „Alle Chats“ geöffnet
   // Geschlossen: beim nächsten Öffnen wieder der Normalfall (Hauptchat bzw. neuer Chat), nicht der zuletzt gewählte (Pass C).
   useEffect(() => { if (!offen) { setConv(null); setUnter(false); setZiel(app.ich.admin ? 'hauptchat' : 'eigen'); } }, [offen]);
+
+  // Paket G: Modell des geöffneten Chats übernehmen; neuer Chat: Vorgabe
+  useEffect(() => { setModell(ziel === 'eigen' && conv ? stand?.chats?.find((c) => c.conv === conv)?.modell ?? '' : ''); }, [conv, ziel, stand?.chats?.find((c) => c.conv === conv)?.modell]);
+  async function dateiWaehlen(l: FileList | null) {
+    const max = (stand?.funktionen?.anhangMaxMb ?? 4) * 1048576;
+    const neu: { name: string; mime: string; daten: string }[] = [];
+    for (const f of Array.from(l ?? []).slice(0, 3)) {
+      if (f.size > max) { setFehler(`${f.name}: größer als ${stand?.funktionen?.anhangMaxMb ?? 4} MB.`); continue; }
+      const daten = btoa(Array.from(new Uint8Array(await f.arrayBuffer()), (b) => String.fromCharCode(b)).join(''));
+      neu.push({ name: f.name, mime: f.type || 'application/octet-stream', daten });
+    }
+    setDateien((alt) => [...alt, ...neu].slice(0, 3));
+  }
 
   const abruf = useRef(0);
   async function laden() {
@@ -74,7 +89,8 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
     unterwegs.current = true;
     setSendet(true); setFehler(null);
     try {
-      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}) });
+      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}), ...(ziel === 'eigen' && stand?.funktionen?.modellwahl ? { modell } : {}), ...(ziel === 'eigen' && dateien.length ? { anhaenge: dateien } : {}) });
+      setDateien([]);
       setText((jetzt) => (jetzt.trim() === t ? '' : jetzt));   // D3: was während des Sendens getippt wurde, bleibt stehen
       if (ziel === 'eigen' && r.conv) setConv(r.conv);
       setWarten(ziel === 'hauptchat' ? 80 : 4);
@@ -94,6 +110,11 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
             <button type="button" role="tab" aria-selected={!unter && ziel === 'eigen'} className={!unter && ziel === 'eigen' ? 'an' : ''} onClick={() => { setUnter(false); setZiel('eigen'); setConv(null); }}>Neuer Chat</button>
             <button type="button" role="tab" aria-selected={unter} className={unter ? 'an' : ''} onClick={() => setUnter(true)}>Unter-Chats</button>
           </div>
+        )}
+        {!unter && ziel === 'eigen' && stand?.funktionen?.modellwahl && (
+          <label className="klein modell-wahl">Modell <select value={modell} onChange={(e) => setModell(e.target.value)} aria-label="Modell dieses Chats">
+            {stand.funktionen.modelle.map((m) => <option key={m.wert} value={m.wert}>{m.label}</option>)}
+          </select></label>
         )}
         <button type="button" className="knopf leise klein" onClick={schliessen} aria-label="Chat schließen">Schließen</button>
       </div>
@@ -115,6 +136,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
         )}
         {stand?.nachrichten.map((n) => (
           <div key={n.id} className={`blase ${n.rolle}`}>
+            {!!n.anhaenge?.length && <p className="klein gedimmt">Angehängt: {n.anhaenge.join(', ')}</p>}
             {n.rolle === 'assistent' && !n.text && n.status === 'laeuft' ? <p className="gedimmt">schreibt …</p> : <Md text={n.rolle === 'assistent' && n.status !== 'laeuft' ? ohneStatuszeilen(n.text) : n.text} klein />}
             {n.status === 'abgebrochen' && <p className="fehlertext klein">Abgebrochen: {n.fehler ?? 'die Antwort lief nicht zu Ende.'}</p>}
             {n.status === 'fehler' && <p className="fehlertext klein">{n.fehler ?? 'Die Antwort kam nicht an.'}</p>}
@@ -143,6 +165,12 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
           <label htmlFor="chat-text" className="unsichtbar">Nachricht</label>
           <textarea id="chat-text" rows={3} value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} placeholder="Frag etwas …"
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void senden(); } }} />
+          {ziel === 'eigen' && stand?.funktionen?.anhang && (
+            <div className="klein">
+              <label>Datei anhängen <input type="file" multiple onChange={(e) => { void dateiWaehlen(e.target.files); e.target.value = ''; }} /></label>
+              {dateien.map((d, i) => <span key={i} className="gedimmt"> · {d.name} <button type="button" className="knopf leise klein" onClick={() => setDateien((a) => a.filter((_, j) => j !== i))} aria-label={`${d.name} entfernen`}>×</button></span>)}
+            </div>
+          )}
           <div className="chat-aktionen">
             {text.length > 7000 && <span className="klein gedimmt">{text.length} / 8000</span>}
             <button type="submit" className="knopf haupt" disabled={sendet || !text.trim() || (ziel === 'eigen' && !!stand?.laeuft)}>{sendet ? 'Sendet …' : ziel === 'hauptchat' && stand?.laeuft ? 'Einreihen' : 'Senden'}</button>

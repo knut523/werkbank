@@ -13,8 +13,8 @@ export const githubAktionAn = (env: Record<string, string | undefined> = process
 export type Aktion =
   | { art: 'kommentar'; repo: string; nummer: number; text: string }
   | { art: 'pr_oeffnen'; repo: string; head: string; base: string; titel: string; text: string; entwurf?: boolean }
-  | { art: 'push'; repo: string; zweig: string; klon: string; base: string }
-  | { art: 'fix_freigeben'; repo: string; fix: string; neu: string }
+  | { art: 'push'; repo: string; zweig: string; klon: string; base: string; schutzGo?: boolean }
+  | { art: 'fix_freigeben'; repo: string; fix: string; neu: string; schutzGo?: boolean }
   | { art: 'fix_ablehnen'; repo: string; fix: string; grund?: string };
 
 /** Knut, 03.11.2026: einzige Ausnahme vom Schutz — Pläne gehen in olaf-docs direkt auf main (AGENTS.md, Christoph). Nur mit Klick, nur Fast-Forward. */
@@ -50,7 +50,7 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
     // R30 (Punkt 4): Die Basis ist nicht mehr hart `dev` — fuehreAus bestimmt sie aus dem PR bzw. origin/HEAD.
     // `base` bleibt hier nur als ausdrücklicher Hinweis (optional), geprüft wird der ermittelte Wert.
     if (a.base !== undefined && a.base !== '' && !zweigOk(a.base)) return { fehler: 'base: ungültiger Zielzweig für das Gate.' };
-    return { art: 'push', repo, zweig: String(a.zweig), klon, base: a.base === undefined || a.base === '' ? '' : String(a.base) };
+    return { art: 'push', repo, zweig: String(a.zweig), klon, base: a.base === undefined || a.base === '' ? '' : String(a.base), ...(a.schutzGo === true || a.schutzGo === 'true' ? { schutzGo: true } : {}) };
   }
   // R30 (Plan 376): @fix freigeben/ablehnen — gebunden an Repo, Fix-Kennung und den geprüften SHA. Der Push selbst
   // läuft nicht hier (Tests und Gate dauern Minuten), sondern im fixTick; hier wird nur die billige Prüfung und die
@@ -62,7 +62,7 @@ export function pruefeAktion(a: Record<string, unknown>, env: Record<string, str
     if (a.art === 'fix_freigeben') {
       const neu = String(a.neu ?? '').trim();
       if (!/^[0-9a-f]{40}$/.test(neu)) return { fehler: 'neu: SHA des geprüften Stands fehlt (aus der Freigabe-Frage).' };
-      return { art: 'fix_freigeben', repo, fix, neu };
+      return { art: 'fix_freigeben', repo, fix, neu, ...(a.schutzGo === true || a.schutzGo === 'true' ? { schutzGo: true } : {}) };
     }
     const grund = String(a.grund ?? '').trim();
     return { art: 'fix_ablehnen', repo, fix, ...(grund ? { grund: grund.slice(0, 500) } : {}) };
@@ -88,8 +88,10 @@ export interface Wege {
   pr?: (repo: string, nummer: number) => Promise<{ state: string; headRefName: string; headRefOid: string; baseRefName: string } | null>;
   /** R30: Standard-Zweig des Repos (origin/HEAD), Fallback für die Gate-Basis, wenn kein PR passt; null = nicht lesbar. */
   standard?: (repo: string) => Promise<string | null>;
+  /** Paket G: Schutzpfad-Prüfung vor dem Push (Diff Basis..sha); ok:false = nichts gepusht. */
+  schutz?: (x: { repo: string; zweig: string; klon: string; sha: string; base: string; nummer: number | null; schutzGo: boolean }) => Promise<{ ok: boolean; grund?: string }>;
   /** R30: @fix freigeben — billige Prüfung + Freigabe-Marke (prfix.ts freigabeSetzen); der Push läuft im fixTick. */
-  fixFreigabe?: (fix: string, neu: string) => Promise<{ ok: boolean; grund?: string }>;
+  fixFreigabe?: (fix: string, neu: string, schutzGo?: boolean) => Promise<{ ok: boolean; grund?: string }>;
   /** R30: @fix ablehnen — Eintrag abschließen, Audit; kein Push. */
   fixAblehnen?: (fix: string, grund: string | null) => Promise<{ ok: boolean; grund?: string }>;
 }
@@ -115,7 +117,7 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
   // an genau diesen SHA). Ablehnen ist synchron: Eintrag abgeschlossen, kein Push, Audit über den Weg.
   if (a.art === 'fix_freigeben') {
     if (!w.fixFreigabe) throw new Error('Die Fix-Pipeline ist hier nicht eingerichtet (WERKBANK_FIX).');
-    const r = await w.fixFreigabe(a.fix, a.neu);
+    const r = await w.fixFreigabe(a.fix, a.neu, a.schutzGo);
     if (!r.ok) throw new Error(r.grund ?? 'Freigabe nicht möglich.');
     return { url: null, text: `Freigabe gesetzt: Fix ${a.fix} @ ${a.neu.slice(0, 7)} — der nächste Takt prüft Tests und Gate NEU und pusht dann. Ergebnis kommt als Meldung.` };
   }
@@ -149,6 +151,7 @@ export async function fuehreAus(roh: Record<string, unknown>, env: Record<string
   // nicht Gleichheit — die lehnte jeden echten Fix ab. Hat sich der PR bewegt (Kopf nicht Vorfahre), bleibt es abgelehnt.
   if (prLage && sha !== prLage.headRefOid && !(w.vorfahre && await w.vorfahre(a.klon, prLage.headRefOid, sha).catch(() => false))) throw new Error(`Der Kopf des Klons (${sha.slice(0, 7)}) liegt nicht über dem Kopf des PR-Zweigs (${prLage.headRefOid.slice(0, 7)}) — kein Fast-Forward, der PR hat sich bewegt. Klon aktualisieren, dann neu fragen.`);
   if (!prLage && docsMain(a.repo, a.zweig) && !(w.vorfahre && await w.vorfahre(a.klon, 'origin/main', sha).catch(() => false))) throw new Error(`olaf-docs main: ${sha.slice(0, 7)} ist kein Fast-Forward auf origin/main — erst auf den aktuellen main setzen, dann neu fragen.`);
+  if (w.schutz) { const sg = await w.schutz({ repo: a.repo, zweig: a.zweig, klon: a.klon, sha, base, nummer: Number.isInteger(prNummer) ? prNummer : null, schutzGo: a.schutzGo === true }); if (!sg.ok) throw new Error(`${sg.grund ?? 'Schutzpfade berührt'} — nichts gepusht.`); }
   await w.push(a.repo, a.klon, sha, a.zweig);
   return { url: null, text: `Gepusht: ${a.zweig} @ ${sha.slice(0, 7)} → ${a.repo} (ohne Force, Gate grün gegen ${base}${prLage ? `, PR #${prNummer}` : ''}).` };
 }
