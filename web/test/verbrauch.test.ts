@@ -1,7 +1,7 @@
 // B4 (Knut 07.11.): Verbrauchsbuch je Lauf — Läufer, Aufgabenart, Summen heute/Woche, Mediane je Aufgabe, Ausreißer (> 2 × Median).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { laeuferVon, aufgabeVon, ergebnisVon, median, verbrauchAus, type Zug, type RunInfo } from '../server/verbrauch.ts';
+import { laeuferVon, aufgabeVon, ergebnisVon, median, verbrauchAus, kennzahlenAus, ledgerAn, type Zug, type RunInfo } from '../server/verbrauch.ts';
 
 const now = Date.UTC(2026, 10, 7, 15);
 const tagAb = Date.UTC(2026, 10, 7, 0);
@@ -65,4 +65,43 @@ test('Vergleich je Aufgabe und Läufer (nur fertige) und Ausreißer über 2 × M
   assert.equal(v.ausreisser.length, 1); assert.equal(v.ausreisser[0].titel, 'Review 3'); assert.equal(v.ausreisser[0].wert, 'tokens'); assert.equal(v.ausreisser[0].faktor, 4.8);
   // unter 3 fertigen Läufen keine Ausreißer
   assert.equal(verbrauchAus(zs.slice(0, 2), runs, now, { tagAb }).ausreisser.length, 0);
+});
+
+test('Ledger-Spalten je Lauf: turns, rolle, prKopf, bauer, sieger, abgelehnt (Paket C)', () => {
+  const runs: RunInfo[] = [{ id: 'aaaa0002', conv: 'c2', titel: 'Bauen B', code: true, zustand: 'erledigt' }];
+  const zs = [
+    z({ conv: 'c2', turns: 7, rolle: 'bauer', prKopf: 'abc123', bauer: 'glm-5.3', abgelehnt: false }),
+    z({ art: 'worker', conv: 'w9', parent: 'u1:c2', anbieter: 'melious', modell: 'glm-5.3 (jcode)', turns: 3, input: 10, output: 5 }),
+  ];
+  const v = verbrauchAus(zs, runs, now, { tagAb });
+  const lauf = v.laeufe.find((x) => x.key === 's:c2')!;
+  assert.equal(lauf.turns, 10, 'turns der Versuche werden summiert');
+  assert.equal(lauf.rolle, 'bauer'); assert.equal(lauf.prKopf, 'abc123'); assert.equal(lauf.bauer, 'glm-5.3');
+  assert.equal(lauf.sieger, null); assert.equal(lauf.abgelehnt, false);
+  // alte Einträge ohne die Felder bleiben lesbar
+  const alt = verbrauchAus([z({ conv: 'c3' })], [{ id: 'a3', conv: 'c3', titel: 'Alt', zustand: 'fertig' }], now, { tagAb });
+  const l3 = alt.laeufe.find((x) => x.key === 's:c3')!;
+  assert.equal(l3.turns, 1); assert.equal(l3.rolle, null); assert.equal(l3.prKopf, null); assert.equal(l3.bauer, null);
+});
+
+test('kennzahlenAus: tokensJeTurn, opusAnteil, reviewsJePrKopf, claudeTokensJePr, rework-/siegQuote je bauer', () => {
+  const zs: Zug[] = [
+    z({ conv: 'c1', modell: 'Claude opus', rolle: 'bauer', prKopf: 'aaa1', bauer: 'glm-5.3', sieger: true, abgelehnt: false, input: 1000, output: 100 }),
+    z({ conv: 'c2', modell: 'Claude sonnet', rolle: 'bauer', prKopf: 'aaa1', bauer: 'glm-5.3', sieger: false, abgelehnt: true, input: 1000, output: 0 }),
+    z({ conv: 'c3', modell: 'GLM opus-Ex? nein: glm opus', rolle: 'pruefer', prKopf: 'aaa2', bauer: 'sonnet-5', sieger: true, abgelehnt: false, input: 400, output: 100 }),
+    z({ conv: 'c4', anbieter: 'melious', modell: 'glm-5.3', rolle: 'pruefer', prKopf: 'aaa2', input: 200, output: 0 }),
+    z({ at: now - 40 * 86400_000, conv: 'cAlt', modell: 'Claude opus', input: 99_999, output: 0 }),
+  ];
+  const k = kennzahlenAus(zs, now);
+  // Tokens: c1 1100 (opus), c2 1000, c3 500 (Name enthält „opus“ → zählt als Opus), c4 200 → 2800/4 Züge
+  assert.equal(k.tokensJeTurn, 700);
+  assert.equal(k.opusAnteil, Math.round(((1100 + 500) / 2800) * 1000) / 10);
+  assert.equal(k.reviewsJePrKopf, 1, 'je Kopf ein Prüfer-Lauf');
+  assert.equal(k.claudeTokensJePr, 1300, 'Mittel der Claude-Summen je Kopf (aaa1: 2100, aaa2: 500, glm zählt nicht)');
+  assert.deepEqual(k.reworkQuote, { 'glm-5.3': 0.5, 'sonnet-5': 0 });
+  assert.deepEqual(k.siegQuote, { 'glm-5.3': 0.5, 'sonnet-5': 1 });
+  // alter Eintrag (ohne Zeitraum) zählt nicht mit; Zeitraum respektieren
+  assert.equal(kennzahlenAus(zs, now, 60).tokensJeTurn > 700, true, '40-Tage-Eintrag zählt erst im 60-Tage-Zeitraum mit');
+  assert.equal(kennzahlenAus([], now).tokensJeTurn, 0);
+  assert.equal(ledgerAn({ WERKBANK_LEDGER: 'aus' }), false); assert.equal(ledgerAn({}), true);
 });

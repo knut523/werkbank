@@ -4,7 +4,7 @@
 
 import { wb } from './db.ts';
 import type { User } from './auth.ts';
-import { LAEUFER, AUFGABEN } from './verbrauch.ts';
+import { LAEUFER, AUFGABEN, ROLLEN } from './verbrauch.ts';
 
 const zuege = () => wb().collection('zug_log');
 const delegationen = () => wb().collection('delegationen');
@@ -36,6 +36,13 @@ export async function recordZug(u: User, raw: any, now = Date.now()): Promise<vo
     delegation: str(raw.delegation, 12), parent: str(raw.parent, 140), kette: raw.kette === true,
     // Verbrauchsbuch (B4): Läufer und Aufgabenart, wenn die Buchung sie nennt (z. B. OpenCode 2: laeufer 'oc2').
     ...((LAEUFER as readonly string[]).includes(raw.laeufer) ? { laeufer: raw.laeufer } : {}), ...((AUFGABEN as readonly string[]).includes(raw.aufgabe) ? { aufgabe: raw.aufgabe } : {}),
+    // Ledger-Spalten (Paket C): nur wenn gebucht — alte Brücken ohne die Felder bleiben unverändert lesbar.
+    ...(Number.isFinite(Number(raw.turns)) && Number(raw.turns) > 0 ? { turns: Math.round(Number(raw.turns)) } : {}),
+    ...(ROLLEN.includes(raw.rolle) ? { rolle: raw.rolle } : {}),
+    ...(typeof raw.prKopf === 'string' && raw.prKopf ? { prKopf: raw.prKopf.slice(0, 64) } : {}),
+    ...(typeof raw.bauer === 'string' && raw.bauer ? { bauer: raw.bauer.slice(0, 80) } : {}),
+    ...(raw.sieger === true || raw.sieger === false ? { sieger: raw.sieger } : {}),
+    ...(raw.abgelehnt === true || raw.abgelehnt === false ? { abgelehnt: raw.abgelehnt } : {}),
   } as any);
 }
 
