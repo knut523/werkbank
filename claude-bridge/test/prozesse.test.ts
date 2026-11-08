@@ -15,7 +15,7 @@ const lies = () => JSON.parse(readFileSync(reg, 'utf8')) as any[];
 
 test('starte: Eintrag in liste() und Registerdatei; beenden(besitzer) tötet Kind und Enkel, Eintrag weg', async () => {
   const enkelDatei = join(dir, 'enkel');
-  const { id, kind } = starte('sh', ['-c', `sleep 600 & echo $! > ${enkelDatei}; wait`], { besitzer: 'strang-1', art: 'test', fristMs: 60_000 });
+  const { id, kind } = starte('sh', ['-c', `sleep 600 & echo $! > ${enkelDatei}; wait`], { besitzer: 'strang-1', art: 'test', fristMs: 60_000, env: process.env });
   assert.ok(await warte(() => existsSync(enkelDatei) && readFileSync(enkelDatei, 'utf8').trim() !== ''));
   const enkel = Number(readFileSync(enkelDatei, 'utf8').trim());
   const e = liste().find((x) => x.id === id)!;
@@ -31,7 +31,7 @@ test('starte: Eintrag in liste() und Registerdatei; beenden(besitzer) tötet Kin
 });
 
 test('fremde PID (pid passt, Startzeit nicht) wird nicht getötet', async () => {
-  const { id, kind } = starte('sleep', ['600'], { besitzer: 'fremd', art: 'test' });
+  const { id, kind } = starte('sleep', ['600'], { besitzer: 'fremd', art: 'test', env: process.env });
   try {
     assert.ok(procStart(kind.pid!));
     assert.equal(lebt({ pid: kind.pid!, start: 'falsch' }), false);
@@ -44,7 +44,7 @@ test('fremde PID (pid passt, Startzeit nicht) wird nicht getötet', async () => 
 
 test('natürliches Ende trägt aus; zuletztAktiv rückt bei Ausgabe vor', async () => {
   let t = 1000;
-  const { id, kind } = starte('sh', ['-c', 'sleep 0.3; echo hallo; sleep 0.3'], { besitzer: 'b', art: 'test', jetzt: () => t } as any);
+  const { id, kind } = starte('sh', ['-c', 'sleep 0.3; echo hallo; sleep 0.3'], { besitzer: 'b', art: 'test', env: process.env, jetzt: () => t } as any);
   const a0 = aktivitaet(id)!;
   t = 5000;
   assert.ok(await warte(() => aktivitaet(id)! > a0));
@@ -57,12 +57,12 @@ test('natürliches Ende trägt aus; zuletztAktiv rückt bei Ausgabe vor', async 
 
 test('vorlaufLesen liefert Einträge einer früheren Datei, leer bei fehlender', () => {
   assert.deepEqual(vorlaufLesen(join(dir, 'gibtsnicht.json')), []);
-  const { id, kind } = starte('sleep', ['600'], { besitzer: 'v', art: 'test' });
+  const { id, kind } = starte('sleep', ['600'], { besitzer: 'v', art: 'test', env: process.env });
   try { assert.ok(vorlaufLesen(reg).some((x) => x.id === id)); } finally { try { process.kill(-kind.pid!, 'SIGKILL'); } catch { /* weg */ } }
 });
 
 test('liste() liefert Kopien: Änderung daran erreicht das Register nicht', () => {
-  const { id, kind } = starte('sleep', ['600'], { besitzer: 'k', art: 'test' });
+  const { id, kind } = starte('sleep', ['600'], { besitzer: 'k', art: 'test', env: process.env });
   try {
     const e = liste({ besitzer: 'k' })[0]; const start = e.start; e.start = 'x'; e.besitzer = 'y';
     assert.equal(liste({ besitzer: 'k' })[0].start, start);
@@ -71,7 +71,7 @@ test('liste() liefert Kopien: Änderung daran erreicht das Register nicht', () =
 
 test('Leader endet, Enkel lebt in der Gruppe → Gruppe wird beendet, Eintrag weg', async () => {
   const enkelDatei = join(dir, 'enkel2');
-  const { id, kind } = starte('sh', ['-c', `sleep 600 & echo $! > ${enkelDatei}; exit 0`], { besitzer: 'leader', art: 'test' });
+  const { id, kind } = starte('sh', ['-c', `sleep 600 & echo $! > ${enkelDatei}; exit 0`], { besitzer: 'leader', art: 'test', env: process.env });
   await new Promise((r) => kind.once('exit', r));
   assert.ok(await warte(() => existsSync(enkelDatei) && readFileSync(enkelDatei, 'utf8').trim() !== ''));
   const enkel = Number(readFileSync(enkelDatei, 'utf8').trim());
@@ -95,9 +95,9 @@ test('beendenProz: Leader endet auf TERM, Enkel ignoriert TERM → Enkel wird tr
 
 test('beenden(besitzer) endet auch Untereinträge `<besitzer>#…` (Endprüfung), aber keinen Namensvetter', async () => {
   const b = `u:strang-${process.pid}-${Date.now()}`;
-  const haupt = starte('sleep', ['600'], { besitzer: b, art: 'claude-cli' });
-  const unter = starte('sleep', ['600'], { besitzer: `${b}#endpruefung`, art: 'claude-cli' });
-  const vetter = starte('sleep', ['600'], { besitzer: `${b}x`, art: 'claude-cli' });
+  const haupt = starte('sleep', ['600'], { besitzer: b, art: 'claude-cli', env: process.env });
+  const unter = starte('sleep', ['600'], { besitzer: `${b}#endpruefung`, art: 'claude-cli', env: process.env });
+  const vetter = starte('sleep', ['600'], { besitzer: `${b}x`, art: 'claude-cli', env: process.env });
   try {
     assert.equal(await beenden(b, 2000), 2, 'Haupt- und Untereintrag beendet');
     assert.equal(laeuft(haupt.kind.pid!), false);

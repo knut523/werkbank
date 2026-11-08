@@ -77,9 +77,9 @@ test('orchStateOf: processes je Strang — die beiden eigenen sichtbar, fremder 
   mod.registerOrchestration(user, conv, STATE, 'strand');
   const key = mod.sitzungsKey(user, conv);
   const kinder = [
-    starte('sleep', ['600'], { besitzer: key, art: 'claude-cli' }),
-    starte('sleep', ['600'], { besitzer: `${key}#endpruefung`, art: 'bash' }),
-    starte('sleep', ['600'], { besitzer: `${user}:fremd`, art: 'claude-cli' }),
+    starte('sleep', ['600'], { besitzer: key, art: 'claude-cli', env: process.env }),
+    starte('sleep', ['600'], { besitzer: `${key}#endpruefung`, art: 'bash', env: process.env }),
+    starte('sleep', ['600'], { besitzer: `${user}:fremd`, art: 'claude-cli', env: process.env }),
   ];
   try {
     const s = mod.orchStateOf(user).find((x: any) => x.conv === conv)!;
