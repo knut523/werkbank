@@ -99,17 +99,20 @@ else
 fi
 
 echo "== d) tamper guard on test files"
+# Skip marker in CALL position only: a line whose code starts with test.skip( / it.only( / describe.todo( ..., or a test(/it( call
+# with { skip|only|todo: ...} as an option on that line. Occurrences inside string literals (fixtures, messages) do not count.
+MARKER='^(\+)?[[:space:]]*(test|it|describe|suite)(\.(skip|only|todo)\(|\(.*,[[:space:]]*\{[[:space:]]*(skip|only|todo)[[:space:]]*:)'
 zaehl() { grep -cE '\b(assert(\.[a-zA-Z]+)?|expect)\(|^\s*(test|it|describe)\(|\bt\.(test|assert)' ; }
 nd=0
 for f in $(git diff --name-only --diff-filter=M "$BASE" "$HEAD_REF" | grep -E '(^|/)test/|\.test\.(ts|mjs)$'); do
   nd=$((nd+1)); a=$(git show "$BASE:$f" | zaehl); b=$(git show "$HEAD_REF:$f" | zaehl)
   [ "$b" -lt "$a" ] && rot "$f: asserts/test blocks $a → $b"
-  git diff -U0 "$BASE" "$HEAD_REF" -- "$f" | grep -E '^\+' | grep -qE '\.(skip|only|todo)\(|\{ *(skip|todo|only) *:' && rot "$f: skip/only/todo marker added"
+  git diff -U0 "$BASE" "$HEAD_REF" -- "$f" | grep -E '^\+' | grep -qE "$MARKER" && rot "$f: skip/only/todo marker added"
 done
 # Added test files: no base to compare against, so the markers are searched in the WHOLE file (a new file made of test.skip passes c otherwise).
 for f in $(git diff --name-only --diff-filter=A "$BASE" "$HEAD_REF" | grep -E '(^|/)test/|\.test\.(ts|mjs)$'); do
   nd=$((nd+1))
-  git show "$HEAD_REF:$f" | grep -qE '\.(skip|only|todo)\(|\{ *(skip|todo|only) *:' && rot "$f: skip/only/todo marker added"
+  git show "$HEAD_REF:$f" | grep -qE "$MARKER" && rot "$f: skip/only/todo marker added"
 done
 for f in "${GELOESCHT[@]}"; do istest "$f" && rot "test file deleted: $f"; done
 [ $nd -eq 0 ] && ok "no existing test file changed" || ok "$nd test file(s) checked"
