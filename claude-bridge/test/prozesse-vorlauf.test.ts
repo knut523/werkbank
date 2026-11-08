@@ -60,3 +60,20 @@ test('vorlaufAufraeumen: Leader per SIGKILL weg, Enkel lebt in der Gruppe → En
     for (const p of [eigene.leader.pid!, eigene.enkel]) { try { process.kill(-p, 'SIGKILL'); } catch { try { process.kill(p, 'SIGKILL'); } catch { /* weg */ } } }
   }
 });
+
+test('Start-Aufräumen löscht nie Einträge, die der neue Lauf inzwischen registriert hat', async () => {
+  const { starte, beenden, registerDatei } = await import('../src/prozesse.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'vorlauf-neu-'));
+  const datei = join(dir, 'prozesse.json');
+  const g = await starteGruppe(dir, 'alt');
+  writeFileSync(datei, JSON.stringify([eintrag(g.leader.pid!, procStart(g.leader.pid!), 'alt1', 'vorlauf')]));
+  const auf = vorlaufAufraeumen(datei, 300);   // wie in sessions.ts: nicht abgewartet
+  registerDatei(datei);
+  const neu = starte('sh', ['-c', 'sleep 600'], { besitzer: 'neu-lauf', art: 'test' });
+  await auf;
+  await gruppeTot(dir, g);
+  try {
+    const inDatei = JSON.parse(readFileSync(datei, 'utf8')) as Eintrag[];
+    assert.ok(inDatei.some((e) => e.id === neu.id), 'Eintrag des neuen Laufs steht noch in der Datei');
+  } finally { await beenden(neu.id); registerDatei(null); }
+});

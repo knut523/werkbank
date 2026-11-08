@@ -36,13 +36,14 @@ let zaehler = 0;
 
 /** Register zusätzlich atomar (tmp + rename) in diese Datei spiegeln; null = nur Speicher. */
 export function registerDatei(pfad: string | null) { datei = pfad; if (pfad) schreibe(); }
-function schreibe() {
-  if (!datei) return;
+function schreibe() { if (datei) schreibeNach(datei); }
+/** Atomar (tmp + rename): immer nur die Einträge DIESES Laufs. */
+function schreibeNach(ziel: string) {
   try {
-    mkdirSync(dirname(datei), { recursive: true });
-    const tmp = `${datei}.${process.pid}.tmp`;
+    mkdirSync(dirname(ziel), { recursive: true });
+    const tmp = `${ziel}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify([...reg.values()], null, 1));
-    renameSync(tmp, datei);
+    renameSync(tmp, ziel);
   } catch { /* Spiegel darf den Start nicht stören */ }
 }
 /** Einträge eines früheren Laufs (R2 räumt auf; hier wird nichts beendet). */
@@ -63,10 +64,13 @@ function startzeitOf(pid: number): string | null {
 const lebendePids = () => readdirSync('/proc').filter((d) => /^\d+$/.test(d)).map(Number);
 
 /** Start-Aufräumen (R2): beendet alle noch lebenden Prozesse aus dem Register des Vorlaufs. Fremde (Startzeit passt
- *  nicht, anderer pgid) werden nie angefasst. Rückgabe: Anzahl geräumter Einträge. Danach wird die Datei geleert. */
+ *  nicht, anderer pgid) werden nie angefasst. Rückgabe: Anzahl geräumter Einträge. Liest die Datei synchron vor dem ersten await. */
 export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<number> {
   const eintraege = vorlaufLesen(pfad);
   if (!eintraege.length) return 0;
+  // Datei synchron übernehmen, vor dem ersten await: danach stehen dort nur die Einträge dieses Laufs —
+  // unabhängig davon, ob registerDatei() vorher oder nachher kommt, und ohne spätes Überschreiben.
+  schreibeNach(pfad);
   let geräumt = 0;
   for (const e of eintraege) {
     // Leader lebt mit passender Startzeit → eigene Gruppe ordentlich TERM → KILL.
@@ -84,7 +88,6 @@ export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<num
     }
     geräumt++;
   }
-  try { writeFileSync(pfad, '[]'); } catch { /* Datei leeren darf den Start nicht blockieren */ }
   return geräumt;
 }
 
