@@ -2381,6 +2381,7 @@ const laufend = () => [...delegs.values()].filter((d) => d.status === 'laeuft').
 
 /** Prüfbefehle mit eigener, danach gelöschter HOME. */
 async function pruefenSauber(dir: string, base: string, o: { fest?: { ref: string; sha: string } | null; maxMs?: number; nur?: (name: string) => boolean } = {}) {
+  if (process.env.BRIDGE_TEST_PRUEF_WIRFT && existsSync(process.env.BRIDGE_TEST_PRUEF_WIRFT)) throw new Error('Testnaht: Prüfung wirft');   // nur Tests: Flag-Datei
   const env = checkEnv();
   try { return await pruefen(dir, base, env, o); } finally { raeumeEnv(env); }
 }
@@ -3436,7 +3437,8 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   if (!statSync(file).isFile()) return { ok: false, status: 400, error: `${raw} ist keine Datei.` };
   if (statSync(file).size > 4 * KAPPUNG.uebergabe) return { ok: false, status: 400, error: `Übergabe ist zu groß (höchstens ${KAPPUNG.uebergabe} Zeichen, C8).` };
   // Laufende Worker kennt die neue Sitzung nicht — erst abwarten (sonst enden sie verwaist mit dem Zug).
-  if (runningOf(key).length) return { ok: false, status: 409, error: `Noch ${runningOf(key).length} Worker laufen — erst delegation_stand abwarten und Ergebnisse in die Übergabe schreiben, dann wechseln.` };
+  const workerLaufen = (): Res | null => runningOf(key).length ? { ok: false, status: 409, error: `Noch ${runningOf(key).length} Worker laufen — erst delegation_stand abwarten und Ergebnisse in die Übergabe schreiben, dann wechseln.` } : null;
+  const w0 = workerLaufen(); if (w0) return w0;
   let text = readFileSync(file, 'utf8');
   const c = checkUebergabe(text);
   if (!c.ok) return { ok: false, status: 400, error: `Übergabe ungültig (C1): ${warum(c)}. Kein Wechsel — Datei ergänzen und noch einmal.` };
@@ -3450,13 +3452,19 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
     if (mb) {
       // Höchstens 10 min (Pass B, 10: sonst greift die Leerlaufgrenze des Lead-Zugs); Zeitgeber vorher und nachher frisch.
       armTurnTimer(lead);
-      const r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 });
+      let r: Awaited<ReturnType<typeof pruefenSauber>> | undefined;
+      let pruefFehler = '';
+      try { r = await pruefenSauber(e.dir, mb, { fest, maxMs: 600_000 }); }
+      catch (err) { pruefFehler = err instanceof Error ? err.message : String(err); }
+      finally { if (lives.get(key) === lead) armTurnTimer(lead); }   // immer wieder scharf, auch wenn die Prüfung wirft
       if (lives.get(key) !== lead) return { ok: false, status: 409, error: 'Der Zug ist inzwischen zu Ende — kein Wechsel.' };
-      armTurnTimer(lead);
+      if (!r) return { ok: false, status: 500, error: `Prüfung der Brücke fehlgeschlagen (${pruefFehler.slice(0, 200)}) — kein Wechsel, noch einmal versuchen.` };
       pruefText = `\n\n## Prüfausgaben der Brücke (Ersatz-Lead ${ersatz.join(', ')})\n\n${r.ergebnisse.map((p) => `- ${p.ok ? 'grün' : 'ROT'} ${p.name} (\`${p.befehl}\`)${p.ok ? '' : `: ${p.ausgabe.slice(-400)}`}`).join('\n')}${r.eingerichtet ? '' : '\n- keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json)'}`;
       text += pruefText;
     }
   }
+  // Während der Prüfung (bis 10 min) kann der Lead einen Worker gestartet haben — nochmal prüfen, sonst endet er verwaist.
+  const w1 = workerLaufen(); if (w1) return w1;
   e.phaseNeu = { phase, text, c2, at: Date.now() };
   e.vorgeprueft = nachPush && b.vorpruefung === 'gruen';   // nur review→push mit grünem Urteil; jeder andere Wechsel setzt zurück
   saveMap();
