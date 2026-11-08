@@ -878,3 +878,25 @@ test('Plan §23 T8 (05.11.: Stränge standen über Nacht): Zug ohne Status-Marke
   assert.match(fortsetzText('ohne_status', null, 1, 2), /ohne Status-Zeile.*Status: fertig \| braucht Antwort \| blockiert.*1\/2/);
   } finally { delete process.env.ORCH_OHNE_STATUS; }
 });
+
+// ---------- B6 (Wave 21): Fehlerklassen ----------
+
+test('B6: Limit wartet bis resetsAt, Überlast Backoff, „wartet auf Eingabe“ → braucht_dich statt Retry', () => {
+  const mk = (o: any) => ({ running: false, interrupted: false, turn: { start: T0 + 1000, end: T0 + 2000, ...o } });
+  // 429: Reset in 90 min → wartet (früher: nach 30 min fortgesetzt); nach dem Reset sofort
+  const lim = mk({ outcome: 'rate_limit', resetsAt: T0 + 90 * 60_000 });
+  const stL = orchStatus(run, lim as any, ai('…'), T0 + 40 * 60_000);
+  assert.equal(autoWeiter(run, stL, lim as any, ai('…'), ctx({ now: T0 + 40 * 60_000 })).action, 'wait');
+  assert.equal(autoWeiter(run, stL, lim as any, ai('…'), ctx({ now: T0 + 91 * 60_000 })).action, 'send');
+  // 529: Backoff wächst mit autoStreak
+  const ov = mk({ outcome: 'error', grund: 'overloaded' });
+  const stO = orchStatus(run, ov as any, ai('…'), T0 + 61_500);
+  assert.equal(stO.cause, 'ueberlast');
+  assert.equal(autoWeiter(run, stO, ov as any, ai('…'), ctx({ now: T0 + 2000 + 30_000 })).action, 'wait');
+  assert.equal(autoWeiter(run, stO, ov as any, ai('…'), ctx({ now: T0 + 2000 + 61_000 })).action, 'send');
+  assert.equal(autoWeiter({ ...run, autoStreak: 2 }, stO, ov as any, ai('…'), ctx({ now: T0 + 2000 + 61_000 })).action, 'wait', '4 min bei Streak 2');
+  // Eingabe: kein cause → kein Retry
+  const ok = mk({ outcome: 'ok' });
+  const stE = orchStatus(run, ok as any, ai('Ich pausiere. Der Strang wartet auf Eingabe.'), T0 + 61_500);
+  assert.match(stE.reason, /braucht_dich/); assert.equal(stE.cause, undefined);
+});

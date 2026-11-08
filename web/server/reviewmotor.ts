@@ -192,3 +192,12 @@ export const BEFUNDE_FORM = [
   '`quelle`: `spec` = Anforderung/Abnahmekriterium aus PR-Text, Plan oder Spec; `standard` = Repo-Regeln, Sicherheit, Handwerk. Ein nicht geprüfter Blockier-Klasse macht das Review `incomplete`.',
   '`vorige` (nur Delta-Review): `quelle` review = unser letztes Review, autor = eigener offener Punkt des Autors; `stand` erledigt | teilweise | offen; `beleg` Datei:Zeile im neuen Stand.',
 ].join('\n');
+
+// ---------- Review-Dedupe (Wave 21 B3) ----------
+
+/** Eine Review je (headSha, baseSha, Zahl der Kommentare) nur einmal — gleicher Schlüssel, gleiches Urteil. WERKBANK_REVIEW_DEDUPE=aus schaltet ab. */
+export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_REVIEW_DEDUPE !== 'aus';
+export const reviewSchluessel = (k: { headSha: string; baseSha: string | null; kommentare: number }) => `${k.headSha}|${k.baseSha ?? '-'}|${k.kommentare}`;
+/** Alle Kommentare des PR (Konversation, Reviews mit Text, Inline-Kommentare) als eine Zahl. */
+export const kommentarZahl = (k: { comments: unknown[]; reviews: { body: string }[]; threads: { comments: unknown[] }[] } | null | undefined) =>
+  k ? k.comments.length + k.reviews.filter((r) => r.body?.trim()).length + k.threads.reduce((n, t) => n + t.comments.length, 0) : 0;

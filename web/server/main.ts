@@ -86,7 +86,7 @@ import { ensemblePassC } from './gegenpruefung.ts';
 import { postReview, statusKommentar, schreibenAus, writeToken, erstelleDraftPr, prOeffnen, type ReviewEvent } from './githubwrite.ts';
 import { ketteModus, starteKette, ketteTick, ketten as ketteCol, publicKette, brichAb as ketteAbbrechen, repoAusTicket, AKTIV as KETTE_AKTIV, type KDeps } from './jirakette.ts';
 import { fuehreAus as githubAktion } from './githubaktion.ts';
-import { fixTick, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron, fixAus } from './prfix.ts';
+import { fixTick, besitzerStrang, fixOverview, prLageVia, pushVia, gateVia, freigabeSetzen, fixAblehnenSynchron, fixAus } from './prfix.ts';
 import { prLage as holePrLage, prLageText, PR_LAGE_AN as prLageAn } from './prlage.ts';
 import { ZWEI_SEITEN_AN as zweiSeitenAn, anlegenEingabe } from './jiraanlegen.ts';
 import { FRAGENPAKET_AN as fragenpaketAn, paketEingabe, paketeCol, neueKennung, paketStand } from './fragenpaket.ts';
@@ -4865,6 +4865,8 @@ async function backgroundJobs() {
     void fixTick({
       userById: async (id) => { const u = await userById(id); return u && allowed(u.email) && u.role === 'ADMIN' ? u : null; },
       startOrch, strandDoc: (id) => orchRuns().findOne({ _id: id as any }),
+      besitzer: async (f) => { const runs: any[] = await orchRuns().find({ userId: f.ownerId, endedAt: null, knutReviewedAt: null, startedAt: { $gt: new Date(Date.now() - 30 * 86400_000) } }, { projection: { _id: 1, title: 1, zustand: 1, prReview: 1, lauf: 1, prompt: 1, 'berichtKopf.github': 1 } }).toArray(); return besitzerStrang(runs.map((r) => ({ ...r, prompt: String(r.prompt ?? '').slice(0, 2000) })), f.repo, f.number); },
+      sendStrand: async (f, strand, text) => { const u = await userById(f.ownerId); if (!u) throw new Error('Besitzer nicht gefunden'); return sendOrch(u, strand, text, 'leitstand'); },
       pr: async (repo, n) => { const t = await githubReadToken(); return t ? prLageVia(t, repo, n) : null; },
       kontext: async (repo, n) => { const t = await githubReadToken(); return t ? prKontextVia(t, repo, n) : null; },
       status: (f, text, id) => statusKommentar(f, text, id),

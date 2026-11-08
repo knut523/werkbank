@@ -16,6 +16,14 @@ export const PHASE_MODELL: Record<Phase, 'opus' | 'sonnet'> = {
 };
 export const PHASEN = Object.keys(PHASE_MODELL) as Phase[];
 
+/** Wave 21 B1: Strang (Lead/Worker, nie der Hauptchat) ohne gesetztes Modell und ohne Phase → sonnet statt des geerbten Standards (opus[1m]).
+ *  BRIDGE_STRANG_MODELL=aus schaltet ab; opus/sonnet/haiku wählbar, alles andere → sonnet. */
+export function strangStandardModell(env: Record<string, string | undefined> = process.env): string | undefined {
+  const v = String(env.BRIDGE_STRANG_MODELL ?? 'sonnet').trim().toLowerCase();
+  if (!v || v === 'aus') return undefined;
+  return /^(opus|sonnet|haiku)$/.test(v) ? v : 'sonnet';
+}
+
 // C8: Kappung als Zahlen (eine Stelle, im Plan als Tabelle).
 export const KAPPUNG = {
   auftrag: 20_000,          // Zeichen je Auftrag an einen Worker
@@ -30,6 +38,59 @@ export const KAPPUNG = {
   wartenS: 240,             // höchstens so lange wartet delegation_stand
   pruefS: 600, pruefMaxS: 1_800, pruefAusgabe: 2_000,
 };
+
+// ---------- Turn-Limit und effort je Profil (Wave 21 B2) ----------
+
+export type TurnRolle = Rolle | 'endpruefung';
+export const TURN_START: Record<TurnRolle, number> = { leser: 30, schreiber: 40, bauer: 120, pruefer: 40, endpruefung: 40 };
+/** Später: p90 der Turns je Rolle aus dem Ledger; turnLimit setzt dann p90 × 1,25 ein (gesetzt = überschreibt den Startwert). */
+export const ledgerP90: Partial<Record<TurnRolle, number>> = {};
+/** EINE Stelle für das Schrittlimit je Rolle: Env BRIDGE_TURNS_<ROLLE> > Ledger (p90×1,25) > Startwert. BRIDGE_TURNLIMIT=aus → alte KAPPUNG.schritte. */
+export function turnLimit(rolle: TurnRolle, env: Record<string, string | undefined> = process.env, p90: Partial<Record<TurnRolle, number>> = ledgerP90): number {
+  if (env.BRIDGE_TURNLIMIT === 'aus') return rolle === 'endpruefung' ? 40 : KAPPUNG.schritte[rolle];
+  const e = Math.floor(Number(env[`BRIDGE_TURNS_${rolle.toUpperCase()}`]));
+  if (Number.isFinite(e) && e > 0) return e;
+  const l = p90[rolle];
+  return l && l > 0 ? Math.ceil(l * 1.25) : TURN_START[rolle];
+}
+/** effort für Lese-Jobs (Leser-Worker, Leser-Strang): low. BRIDGE_EFFORT_LESER=aus|medium|high …; sonst keiner (geerbt). */
+export function effortLesen(env: Record<string, string | undefined> = process.env): 'low' | 'medium' | 'high' | undefined {
+  const v = String(env.BRIDGE_EFFORT_LESER ?? 'low').trim().toLowerCase();
+  return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
+}
+
+// ---------- Review-Dedupe (Wave 21 B3) ----------
+
+/** Eine Review je (headSha, baseSha, Zahl neuer Kommentare) nur einmal. Pass C (plan-to-pr) und Brücken-Prüfer gelten als dieselbe Prüfung. */
+export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.BRIDGE_REVIEW_DEDUPE !== 'aus';
+export const reviewSchluessel = (k: { headSha: string; baseSha: string; kommentare?: number }) => `${k.headSha}|${k.baseSha}|${k.kommentare ?? 0}`;
+export interface Urteil { urteil: 'ok' | 'maengel' | 'falsch'; befunde: string[]; von: string; at: number }
+const urteile = new Map<string, Urteil>();
+export function urteilMerken(schluessel: string, u: Urteil): void {
+  urteile.delete(schluessel); urteile.set(schluessel, u);
+  while (urteile.size > 200) urteile.delete(urteile.keys().next().value!);
+}
+/** Vorhandenes Urteil zum Schlüssel (nur mit Dedupe an). */
+export const urteilZu = (schluessel: string, env: Record<string, string | undefined> = process.env): Urteil | undefined => (dedupeAn(env) ? urteile.get(schluessel) : undefined);
+export const urteileLeeren = () => urteile.clear();
+
+// ---------- Runden: ab Runde 2 nur Delta und nur Blocker (Wave 21 B4) ----------
+
+export const PRUEF_FORMAT = 'Ausgabeformat: Urteil (ok|maengel|falsch) + Befunde als `datei:zeile — Schwere (blocker|hoch|mittel|niedrig)`, je Befund eine Zeile, keine Prosa.';
+const runden = new Map<string, { runde: number; kopf: string | null }>();
+/** Bisherige Prüfrunden eines Strangs (Zahl, Kopf der letzten geprüften Fassung). */
+export const rundeStand = (parent: string) => runden.get(parent) ?? { runde: 0, kopf: null };
+export const rundeVermerken = (parent: string, kopf: string | null) => { runden.set(parent, { runde: rundeStand(parent).runde + 1, kopf }); };
+export const rundenLeeren = () => runden.clear();
+/** Auftrag des Prüfers: Runde 1 und „vor Push“ voll, ab Runde 2 nur das Delta seit der letzten Runde und nur Blocker (BRIDGE_PRUEF_DELTA=aus → immer voll). */
+export function pruefAuftrag(o: { ofId: string; runde: number; vorPush?: boolean; deltaVon?: string | null; hinweis?: string }, env: Record<string, string | undefined> = process.env): string {
+  const basis = `Prüfe die Arbeit der Delegation ${o.ofId} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.`;
+  const delta = env.BRIDGE_PRUEF_DELTA !== 'aus' && o.runde >= 2 && !o.vorPush;
+  const art = delta
+    ? `Runde ${o.runde}: NUR das Delta${o.deltaVon ? ` (git diff ${o.deltaVon.slice(0, 12)}..HEAD)` : ' seit deiner letzten Prüfung'} und NUR Blocker (Schwere blocker/hoch); keine Nits, keine Wiederholung alter Punkte außer „noch offen“. Kein voller Durchgang — der kommt vor dem Push.`
+    : o.vorPush ? 'Voller Durchgang vor dem Push: der ganze Diff, alle Schweregrade.' : `Runde ${Math.max(1, o.runde)}: voller Durchgang.`;
+  return `${basis}\n${art}\n${PRUEF_FORMAT}${o.hinweis ? `\n\nHinweis des Leads: ${o.hinweis}` : ''}`;
+}
 
 // ---------- Abschluss-Block ----------
 

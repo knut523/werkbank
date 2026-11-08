@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -38,6 +38,8 @@ import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from '
 import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
+import { strangRegeln } from './strangregeln.ts';
+import { fehlerklasse, fehlerklassenAn } from './fehlerklassen.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
 import { auslastung as claudeAuslastung } from './auslastung.ts';
@@ -104,6 +106,8 @@ interface Live {
   // Mehrere Claude-Konten: hat dieser Versuch rate_limit gemeldet (mit Reset), und ist schon etwas passiert?
   rateLimited: { resetsAt?: number } | null;
   rateLimitReset?: number;
+  /** B6: der Zug endete an einer Überlast (529) — Brücke vermerkt es im Zug, der Strang wartet mit Backoff. */
+  ueberlast?: boolean;
   progressed: boolean;
   // Orchestrator (P2): gestartete Teilagenten (tool_use_id → Beschreibung), Starts in diesem Zug, Rolle je agent_id.
   subagents: Map<string, string>;
@@ -152,7 +156,7 @@ const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DA
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
-const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? KAPPUNG.schritte[orchMap[live.key]?.rolle ?? 'leser'] : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
+const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? turnLimitRolle(orchMap[live.key]?.rolle ?? 'leser') : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
 // (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
@@ -261,7 +265,7 @@ export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte 
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
 // (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
 export interface Sperren { waechter: number; klassifikator: number; grund: string }
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; jobtyp?: Jobtyp; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; jobtyp?: Jobtyp; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; resetsAt?: number; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -595,6 +599,14 @@ export function endLeitstand(userId: string, convId: string): boolean {
 export function wakeBatch(prompt: string): string | null {
   const last = prompt.trimEnd().split('\n').at(-1) ?? '';
   return last.match(/^#leitstand-([a-f0-9]{8,32})$/)?.[1] ?? null;
+}
+
+/** B6: Fehlerklasse und Reset-Zeitpunkt des Zuges für den Strang-Takt (nur gesetzt, wenn es sie gab). */
+function turnFehler(live: { ueberlast?: boolean; rateLimitReset?: number; outcome?: string }): { grund?: string; resetsAt?: number } {
+  if (!fehlerklassenAn()) return {};
+  if (live.ueberlast && (live.outcome === 'error' || !live.outcome)) return { grund: 'overloaded' };
+  if (live.outcome === 'rate_limit' && live.rateLimitReset) return { resetsAt: live.rateLimitReset };
+  return {};
 }
 
 function setTurn(key: string, turn: OrchEntry['turn']) {
@@ -961,6 +973,9 @@ function handleMessage(live: Live, msg: any) {
       } else if (msg.error === 'rate_limit') {
         // Kontingent ausgeschöpft: die Meldung kommt erst, wenn kein weiteres Konto übernehmen kann (handleTurn).
         live.rateLimited = { resetsAt: live.rateLimitReset };
+      } else if (msg.error && fehlerklassenAn() && fehlerklasse(msg.error, msgText(msg)) === 'ueberlast') {
+        live.ueberlast = true;
+        emitStatus(live, `⚠️ ${AUTH_HINTS.overloaded}`);
       } else if (msg.error) {
         emitStatus(live, `⚠️ ${AUTH_HINTS[msg.error] ?? `Claude meldet einen Fehler (${msg.error}).`}`);
       }
@@ -1836,7 +1851,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     settingSources: ['user', 'project'],
     // Nicht alle ~220 Skills: Kern + Vorlage + im Chat genannte (claude-bridge/src/skills.ts).
     skills: skillsFor(cfg.stateDir, key, req.instructions ?? '', req.prompt),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.leit ? githubAppend() : '', live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? `${ORCH_APPEND}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? (melAcc?.zuarbeit === 'claude' ? MEL_SUB_HINT_CLAUDE : MEL_SUB_HINT) : '', (live.orch || live.leit) && !live.worker && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? (melAcc ? CHALLENGE_HINT : CHALLENGE_AUS_HINT) : '', extra].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [SYSTEM_APPEND, live.leit ? githubAppend() : '', live.mode === 'auto' ? (autoScope() === 'voll' ? AUTO_APPEND_VOLL : AUTO_APPEND) : '', process.env.BRIDGE_SUBAGENT_ROLES === 'off' || live.worker ? '' : orchestratorAppend(), live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') + (strangRegeln(false) ? `\n\n${strangRegeln(false)}` : '') : live.orch ? `${ORCH_APPEND}\n\n${strangRegeln(melSubAn())}\n\n${DELEG_HINT}${profil === 'release' ? `\n\n${RELEASE_APPEND}` : ''}` : '', live.leit ? LEITSTAND_APPEND : '', (live.orch || live.leit) && !live.worker && melSubAn() ? (melAcc?.zuarbeit === 'claude' ? MEL_SUB_HINT_CLAUDE : MEL_SUB_HINT) : '', (live.orch || live.leit) && !live.worker && profil !== 'leser' && orchMap[key]?.tiefe !== 'quick' && orchMap[key]?.tiefe !== 'live' ? (melAcc ? CHALLENGE_HINT : CHALLENGE_AUS_HINT) : '', extra].filter(Boolean).join('\n\n') },
     mcpServers: withToken(req.mcpServers ?? {}, isMelious(acct) ? req.token : acct.token),
     permissionMode: live.mode,
     // Eskalation des Auto-Modus (Rückfrage im Chat) bzw. zweite Sicherung, falls ein Aufruf am Hook vorbei beim
@@ -1946,8 +1961,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       options.systemPrompt = [LESER_SYSTEM, live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
     }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
-    const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model;
+    const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model ?? (!mel && live.orch && !live.leit ? strangStandardModell() : undefined);
     if (model) options.model = model; else delete options.model;
+    // B2: Lese-Jobs mit effort low (nur Claude; Melious ignoriert/kennt es nicht sicher).
+    { const eff = !mel && (profil === 'leser' || (live.worker && orchMap[key]?.rolle === 'leser')) ? effortLesen() : undefined; if (eff) options.effort = eff; else delete options.effort; }
     live.onClaude = live.worker && !mel;
     live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
     live.modelSeen = undefined;
@@ -1990,7 +2007,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       let lastRead: string[] = [];
       let phaseSwitches = 0;
       for (let i = 0; ; i++) {
-        live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
+        live.rateLimited = null; live.rateLimitReset = undefined; live.ueberlast = false; live.progressed = false;
         providerMap.set(key, providerOf(acct));
         if (providerMap.size > 5000) providerMap.delete(providerMap.keys().next().value!);
         const u0 = { ...live.usage }, a0 = Date.now();
@@ -2104,6 +2121,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (live.inbox?.open) closeInbox(live.inbox);
       mark(live, 'ende');
       if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'),
+        ...turnFehler(live),
         ...(live.sperren.waechter || live.sperren.klassifikator ? { sperren: { ...live.sperren } } : { sperren: undefined }) });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
       // Worker leben höchstens so lange wie der Lead-Zug (Council 165, 3).
@@ -2614,7 +2632,7 @@ async function claudeVerifizierer(live: Live, req: TurnRequest, prompt: string, 
   let text = '', usage: MeliousUsage | undefined, fehler = '';
   try {
     const options: Record<string, any> = {
-      cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: 40, permissionMode: 'default', abortController: abort, env, mcpServers: {},
+      cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: turnLimitRolle('endpruefung'), permissionMode: 'default', abortController: abort, env, mcpServers: {},
       allowedTools: ['Read', 'Grep', 'Glob'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'Task', 'Agent', 'WebFetch', 'WebSearch', 'AskUserQuestion'],
       canUseTool: nurLesen,
       hooks: { PreToolUse: [{ hooks: [async (i: any) => { const r = await nurLesen(i.tool_name, i.tool_input ?? {}); return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: r.behavior, permissionDecisionReason: r.behavior === 'deny' ? r.message : 'Verifizierer liest' } }; }] }] },
@@ -3092,6 +3110,8 @@ async function delegationLauf(d: Deleg): Promise<void> {
     // Volle Antwort ins Protokoll (eigener Scratch des Leads — dort darf er lesen); an den Lead geht höchstens KAPPUNG.ergebnis.
     try { const dir = join(scratchFor(d.userId), 'delegationen'); mkdirSync(dir, { recursive: true }); d.protokoll = join(dir, `${d.id}.md`); writeFileSync(d.protokoll, d.text); } catch { d.protokoll = undefined; }
     if (d.status !== 'fertig') await dropWorktree(d).catch(() => {});
+    // B3: Urteil des Prüfers unter (Kopf, Basis, Kommentare) merken — derselbe Stand wird nicht noch einmal geprüft.
+    if (d.rolle === 'pruefer' && d.status === 'fertig' && d.abschluss?.urteil) { const sk = pruefSchluessel(d.pruefe ? delegs.get(d.pruefe) : undefined); if (sk) urteilMerken(sk, { urteil: d.abschluss.urteil, befunde: d.abschluss.befunde ?? [], von: d.id, at: Date.now() }); }
     log('delegation fertig', { id: d.id, rolle: d.rolle, status: d.status, modell: d.modell, abweichungen: d.abweichungen.length, ms: d.ende - d.start });
     report(d);
   }
@@ -3108,8 +3128,14 @@ function newDeleg(userId: string, parent: string, parentConv: string, rolle: Rol
   return d;
 }
 
+/** B3: Dedupe-Schlüssel eines geprüften Stands (Kopf der Delegation, Basis des Unter-Worktrees); null, wenn Kopf/Basis fehlen. */
+export function pruefSchluessel(of: Deleg | undefined, kommentare = 0): string | null {
+  const headSha = of?.git?.kopf, baseSha = of?.wt?.base;
+  return headSha && baseSha ? reviewSchluessel({ headSha, baseSha, kommentare }) : null;
+}
+
 /** Prüfer für eine fertige Bauer-/Schreiber-Delegation: Modell ≠ Autor, Klasse ≥ Autor; keiner frei → „ungeprüft“ (kein stiller Ersatz). */
-async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = ''): Promise<Deleg | null> {
+async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = '', vorPush = false): Promise<Deleg | null> {
   const autor = of.modell ?? '';
   // Der Geprüfte selbst zählt nicht (er wartet nur noch auf seinen Prüfer).
   const voll = () => runningOf(of.parent).filter((x) => x !== of).length >= KAPPUNG.maxWorker || laufend() - (of.status === 'laeuft' ? 1 : 0) >= maxWorkers();
@@ -3121,9 +3147,10 @@ async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = ''): P
   if (!cand) return kein(`ungeprüft (kein Prüfer ≥ Autor-Klasse ${klasse(autor)} frei) — Lead prüft selbst; \`challenge\` ist kein Ersatz, wenn der Autor GLM 5.3 ist`);
   if (voll()) return kein(`Prüfer nicht gestartet (Worker-Grenze erreicht) — Lead prüft selbst`);   // nach dem await erneut (kein Wettlauf)
   if (!lives.get(of.parent)?.req) return kein('Prüfer nicht gestartet (Lead-Zug zu Ende) — Lead prüft selbst');   // Re-Review F4
-  const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, `Prüfe die Arbeit der Delegation ${of.id} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.${hinweis ? `\n\nHinweis des Leads: ${hinweis}` : ''}`, of.wt?.dir ?? of.cwd, of.req);
+  const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, pruefAuftrag({ ofId: of.id, runde: rundeStand(of.parent).runde + 1, vorPush, deltaVon: rundeStand(of.parent).kopf, hinweis }), of.wt?.dir ?? of.cwd, of.req);
   d.pruefe = of.id;
   of.pruefer = d.id;
+  rundeVermerken(of.parent, of.git?.kopf ?? null);
   // Claude-Rückfall nur, wenn Sonnet selbst die Bedingung erfüllt (≠ Autor, Klasse ≥ Autor).
   const sonnetOk = klasse('sonnet') >= klasse(autor) && familie(autor) !== 'sonnet';
   registerWorker(d, cand.anbieter === 'melious' ? { profil: 'leser', modell: `melious:${cand.modell}`, workerClaude: 'sonnet', noClaude: !sonnetOk } : { profil: 'leser', modell: 'melious:auto', workerClaude: 'sonnet', wantMel: false });
@@ -3175,7 +3202,10 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
     if (of.status === 'laeuft') return { ok: false, status: 409, error: `Delegation ${of.id} läuft noch — erst delegation_stand.` };
     if (of.pruefer) return { ok: false, status: 409, error: `${of.id} hat schon den Prüfer ${of.pruefer} — Ergebnis mit delegation_stand.` };
     if (of.wt && !existsSync(of.wt.dir)) return { ok: false, status: 409, error: `Der Unter-Worktree von ${of.id} ist schon weggeräumt (Urteil abgegeben).` };
-    const pr = await startPruefer(of, risiko, aufgabe);
+    // B3: gleicher Stand schon geprüft → vorhandenes Urteil wiederverwenden, keinen zweiten Prüfer starten.
+    const vorhanden = (() => { const sk = pruefSchluessel(of, Number((b as any).kommentare) || 0); return sk ? urteilZu(sk) : undefined; })();
+    if (vorhanden) return { ok: true, text: `Derselbe Stand (Kopf, Basis, Kommentare) ist schon geprüft (Prüfer ${vorhanden.von}): Urteil ${vorhanden.urteil}${vorhanden.befunde.length ? `\n${vorhanden.befunde.join('\n')}` : ''}\nWiederverwendet, kein neuer Prüfer gestartet.` };
+    const pr = await startPruefer(of, risiko, aufgabe, (b as any).vorPush === true);
     if (!pr) return { ok: true, text: `Kein Prüfer gestartet: ${of.hinweis}` };
     return { ok: true, id: pr.id, text: `Prüfer ${pr.id} für ${of.id} gestartet (Modell ≠ Autor, Klasse ≥ Autor). Ergebnis mit delegation_stand.` };
   }
