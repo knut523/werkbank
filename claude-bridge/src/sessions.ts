@@ -1595,7 +1595,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // erste Zug las „Melious nicht frei“ und blieb in der Schlange hängen). Der Zug unten schreibt sie mit frischen Konten erneut.
   // Die Liste wird hier einmal geholt und vom Zug unten wiederverwendet (nur wenn der Zug nicht in der Schlange gewartet hat) — ein zweiter Abruf je Zug wäre Mehrlast auf dem internen Kanal.
   let fruehKonten: Promise<any[] | null> | null = null;
-  if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); setzeMelious(req.userId, !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now())); } }); }
+  let melBuchbar = false;   // Melious für die Person nutzbar: nur dann gibt es etwas vorab zu buchen (ohne Konto verbraucht der Zug keine Melious-Energie)
+  if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); melBuchbar = !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now()); setzeMelious(req.userId, melBuchbar); } }); }
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1656,7 +1657,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
   // Zulassung und Buchung sind getrennte Schritte (Warteschlange, gleichzeitiger Zug derselben Person, Lage ohne Antwort): scheitert
   // die Buchung, ist das eine Ablehnung wie bei der Zulassung — der Zug startet nicht (Ursache: beides war nicht eine Entscheidung).
-  if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) {
+  if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId && melBuchbar) {
     const b = budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
     if (!b.ok) { lockGrund = b.grund || 'Energie-Budget reicht gerade nicht'; lock = 'chat-busy'; }
   }
