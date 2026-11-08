@@ -779,6 +779,7 @@ async function einreihen(d: any, msg: string, via: SendVia, grund: string, ansch
   await runs().updateOne({ _id: d._id }, { $push: { ausstehend: { $each: [e], $slice: -AUSSTEHEND_MAX } } as any, $set: { ausstehendFehler: 0 } });
   return { id: String(d._id), conv: d.conv, url: d.url, eingereiht: true, ausstehendId: e.id, zustellung: `eingereiht (${grund}) — die Werkbank stellt sie beim nächsten freien Zug von selbst zu` };
 }
+// Passt+Notiz verliert die Freigabe NICHT (Absicht, geprüft 08.11.): die Notiz geht als via 'notiz' raus und fasst reviewedAt nie an; nur eine mitgebündelte Handnachricht (Knut will weiterbauen) hebt sie auf — test/ausstehend.test.ts.
 /** Gebündelt zählt der stärkste Absender: Knut (hand) vor dem Hauptchat (leitstand) vor einer reinen Notiz nach „Passt“. */
 export function ausstehendVia(l: Ausstehend[]): SendVia {
   return l.some((x) => x.via === 'hand') ? 'hand' : l.some((x) => x.via === 'leitstand') ? 'leitstand' : 'notiz';
