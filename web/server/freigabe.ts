@@ -22,6 +22,7 @@ import { GIT_SAFE } from './gitsafe.ts';
 import { readBericht, paketDatei, reviewDir, findPaket } from './bericht.ts';
 import { paketFile, PAKET_RE, renderPaketMd } from './reviewpakete.ts';
 import { execSummary } from './berichtkopf.ts';
+import { schutzTreffer, endpruefungAnfordern, endpruefungGruen } from './schutzpfade.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 export const freigaben = () => wb().collection('freigaben');
@@ -46,7 +47,7 @@ export function patchId(g: GitFn, dir: string, base: string, head: string): stri
   return out ? out.split(/\s+/)[0] || null : null;
 }
 
-export interface RepoFakten { dir: string; key: string | null; branch: string | null; head: string; clean: boolean; dirty: string[]; baseRef: string | null; mergeBase: string | null; commits: { sha: string; subject: string }[]; more: number; stat: string; patchId: string | null }
+export interface RepoFakten { dir: string; key: string | null; branch: string | null; head: string; clean: boolean; dirty: string[]; baseRef: string | null; mergeBase: string | null; commits: { sha: string; subject: string }[]; more: number; stat: string; patchId: string | null; dateien: string[] }
 
 /** Was freigegeben würde (rein bis auf git, testbar mit einem git-Ersatz). */
 export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
@@ -66,6 +67,7 @@ export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
     commits: all.slice(0, 30), more: Math.max(0, all.length - 30),
     stat: mergeBase ? (tryGit(g, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--stat=100', '--stat-count=40', mergeBase, 'HEAD'], dir) ?? '') : '',
     patchId: mergeBase ? patchId(g, dir, mergeBase, 'HEAD') : null,
+    dateien: mergeBase ? (tryGit(g, ['diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) ?? '').split('\n').filter(Boolean) : [],
   };
 }
 
@@ -256,7 +258,7 @@ export function bauGateUrteil(r: any, head: string): { ok: boolean; text: string
   return { ok: true, text: r.eingerichtet ? 'Brücken-Prüfung grün' : 'Brücken-Prüfung grün (nur git diff --check — im Repo sind keine Prüfbefehle eingerichtet)' };
 }
 
-export async function freigeben(u: User, d: any, seen: { head?: string; patchId?: string | null }, g: GitFn = git, log?: (m: string, x: Record<string, unknown>) => void, gate?: BauGate) {
+export async function freigeben(u: User, d: any, seen: { head?: string; patchId?: string | null; schutzGo?: boolean }, g: GitFn = git, log?: (m: string, x: Record<string, unknown>) => void, gate?: BauGate) {
   if (d.lastStatus === 'running') throw err(409, 'Der Unter-Chat arbeitet gerade — erst wenn er fertig ist, freigeben.');
   const f = repoFakten(strandRepo(d), g);
   if (!f.clean) throw err(409, `Ungespeicherte Änderungen im Arbeitsordner (${f.dirty.length}) — die Vorschau zeigt dann etwas anderes als der Commit. Erst committen lassen.`);
@@ -266,10 +268,18 @@ export async function freigeben(u: User, d: any, seen: { head?: string; patchId?
   if (String(seen.head ?? '') !== f.head || (seen.patchId ?? null) !== f.patchId) throw err(409, 'Der Stand hat sich inzwischen geändert — Seite neu laden und noch einmal ansehen.');
   const da: any = await freigaben().findOne({ strand: String(d._id), key: f.key, branch: f.branch, head: f.head, revokedAt: null });
   if (da) return publicFreigabe(da);
+  // Paket G: Schutzpfade — Opus-Endprüfung (gesammelt vor der Push-Welle) und Knuts ausdrückliches Go, bevor irgendetwas freigegeben wird.
+  const schutz = schutzTreffer(f.dateien);
+  if (schutz.length) {
+    const ep = await endpruefungAnfordern({ strand: String(d._id), titel: String(d.title ?? ''), key: f.key, head: f.head, treffer: schutz });
+    const liste = `${schutz.slice(0, 5).join(', ')}${schutz.length > 5 ? ` (+${schutz.length - 5})` : ''}`;
+    if (!(await endpruefungGruen(String(d._id), f.head))) throw err(409, `Schutzpfade berührt (${liste}) — erst die Opus-Endprüfung (${ep._id}, wird mit den anderen vor der Push-Welle gesammelt), dann dein Go.`);
+    if (seen.schutzGo !== true) throw err(409, `Schutzpfade berührt (${liste}) — die Opus-Endprüfung ist grün; jetzt brauche ich dein ausdrückliches Go für genau diese Dateien (schutzGo).`);
+  }
   const gepr = gate ? await gate(d, f.head) : null;
   if (gepr && !gepr.ok) throw err(409, gepr.text);
   const doc = { _id: 'f-' + randomUUID().slice(0, 8), userId: u.id, strand: String(d._id), title: d.title, repo: f.dir, key: f.key, branch: f.branch, head: f.head, baseRef: f.baseRef, mergeBase: f.mergeBase, patchId: f.patchId,
-    commits: f.commits.length, at: new Date(), by: u.email, aktiv: true, revokedAt: null, pushedAt: null, pr: null, ...(gepr ? { bauGate: gepr.text } : {}) };
+    commits: f.commits.length, at: new Date(), by: u.email, aktiv: true, revokedAt: null, pushedAt: null, pr: null, ...(gepr ? { bauGate: gepr.text } : {}), ...(schutz.length ? { schutz } : {}) };
   // Eindeutiger Index auf aktive Freigaben (db.ts): zwei schnelle Klicks ergeben eine Freigabe.
   try { await freigaben().insertOne(doc as any); }
   catch (e: any) { if (e?.code === 11000) { const x: any = await freigaben().findOne({ strand: doc.strand, key: doc.key, branch: doc.branch, head: doc.head, aktiv: true }); if (x) return publicFreigabe(x); } throw e; }

@@ -37,6 +37,7 @@ import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, meldeBedarf, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID, bodenGrund } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
+import { endpruefungSammeln, endpruefungUrteil, endpruefungen } from './schutzpfade.ts';
 import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin, bauGateAn, bauGateUrteil } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
@@ -2453,10 +2454,23 @@ on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe$/, async (req, res, m) => {
   const u = await needAdmin(req);
   const d = await reviewStrand(u, m[1]);
   const b = await body(req);
-  const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null }, undefined, log, bauGateAn() ? (x, h) => bauGateBruecke(u, x, h) : undefined);
+  const f = await freigeben(u, d, { head: b.head, patchId: b.patchId ?? null, schutzGo: b.schutzGo === true }, undefined, log, bauGateAn() ? (x, h) => bauGateBruecke(u, x, h) : undefined);
   antwortGezaehlt('push', 'ui');
   await hinweisFreigabe(u, f, d).catch(() => {});
   send(res, 200, f);
+});
+// Paket G: Opus-Endprüfungen der Schutzpfade — offene Liste, Bündel vor der Push-Welle, Urteil eintragen (nur Admin).
+on('GET', /^\/api\/endpruefungen$/, async (req, res) => {
+  await needAdmin(req);
+  send(res, 200, { offen: (await endpruefungen().find({ status: 'offen' }).sort({ angefordertAt: 1 }).limit(50).toArray()).map((e: any) => ({ id: String(e._id), strand: e.strand, titel: e.titel, head: e.head, treffer: e.treffer, buendel: e.buendel ?? null })) });
+});
+on('POST', /^\/api\/endpruefungen\/sammeln$/, async (req, res) => { await needAdmin(req); send(res, 200, (await endpruefungSammeln()) ?? { anzahl: 0 }); });
+on('POST', /^\/api\/endpruefungen\/(e-[0-9a-f]{8})\/urteil$/, async (req, res, m) => {
+  const u = await needAdmin(req);
+  const b = await body(req);
+  if (b.urteil !== 'ok' && b.urteil !== 'maengel') throw new HttpError(400, 'urteil: ok oder maengel.');
+  if (!(await endpruefungUrteil(m[1], b.urteil, u.email, String(b.text ?? '')))) throw new HttpError(409, 'Diese Endprüfung ist schon entschieden oder gibt es nicht.');
+  send(res, 200, { ok: true });
 });
 on('POST', /^\/api\/review\/([\w-]{1,40})\/freigabe\/(f-[0-9a-f]{8})\/zurueck$/, async (req, res, m) => {
   const u = await needAdmin(req);
