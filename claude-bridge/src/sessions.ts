@@ -2150,7 +2150,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         }
         if (!live.rateLimited || live.abort.signal.aborted) break;
         // Paket D: 402/Energie bei Melious → Breaker mit Backoff, der Schlüssel wird NICHT geparkt (06.11.: geparkter Schlüssel ließ die Stränge stehen).
-        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(user);
+        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(req.userId);
         else markExhausted(user, acct, live.rateLimited.resetsAt);
         if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
