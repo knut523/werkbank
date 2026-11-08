@@ -135,7 +135,9 @@ export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { se
   let zeit = false;
   const t = setTimeout(() => { zeit = true; if (kind.pid) groupKill(kind.pid); }, o.timeoutMs ?? 15 * 60_000); // Ergebnis erst bei 'close': Kind ist dann abgeholt, kein Zombie in der Gruppe
   kind.on('error', (e) => ende(false, String(e)));
-  kind.on('close', (code) => ende(code === 0 && !zeit, zeit ? '\n[Timeout]' : ''));
+  let rc: number | null = null;
+  kind.on('exit', (code) => { rc = code; if (kind.pid) groupKill(kind.pid); }); // Enkel mit geerbter Pipe würde 'close' sonst bis zum Timeout aufhalten
+  kind.on('close', (code) => ende((rc ?? code) === 0 && !zeit, zeit ? '\n[Timeout]' : ''));
 }));
 
 // ---- Statistik und Abschaltregel ---------------------------------------------------------------------------------------------------

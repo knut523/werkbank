@@ -177,3 +177,11 @@ test('P7: Timeout tötet die ganze Gruppe (Enkel sleep 600)', async () => {
 test('P7: Kill einer toten Gruppe wirft nicht', () => {
   assert.doesNotThrow(() => groupKill(2 ** 22 - 1));
 });
+test('P7: Kind endet mit 0, Enkel hält die Pipe → Rückkehr schnell, ok, Gruppe tot', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'p7-'));
+  const t0 = Date.now();
+  const r = await pruefLauf(cwd, 'sh', ['-c', 'sleep 600 & echo $! > enkel; echo $$ > pgid; exit 0'], { timeoutMs: 30000 });
+  assert.ok(Date.now() - t0 < 3000, `dauerte ${Date.now() - t0} ms`);
+  assert.equal(r.ok, true);
+  assert.throws(() => process.kill(Number(readFileSync(join(cwd, 'enkel'), 'utf8')), 0), { code: 'ESRCH' });
+});
