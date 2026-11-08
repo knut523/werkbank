@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
+import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, bauerDeckelMs, diffGroesse, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
 const gruen: Schnell = { tsc: true, lint: true, tests: true };
@@ -125,4 +125,34 @@ test('Abschaltregel: Zweitbauer < 15 % nach 30 Läufen → aus; Env BRIDGE_BESTO
   assert.equal(abgeschaltet(ok, {}), false, '5/30 ≥ 15 %');
   assert.equal(abgeschaltet(neueStatistik(), { BRIDGE_BESTOFN: 'aus' }), true); assert.equal(bestofnAn({ BRIDGE_BESTOFN: 'aus' }), false);
   assert.deepEqual(bauerFuer(['a.ts'], {}, s), [FLASH], 'abgeschaltet → nur glm-flash');
+});
+
+// ---- Zeitdeckel (wb21/i-f-deckel): ein zu großer Punkt ist ein Signal an den Plan, keine Eskalation --------------------------------
+test('Deckel-Vorgabe: BRIDGE_BAUER_DECKEL_S, ungültig/leer/0 → 600 s', () => {
+  assert.equal(bauerDeckelMs({}), 600_000);
+  assert.equal(bauerDeckelMs({ BRIDGE_BAUER_DECKEL_S: '30' }), 30_000);
+  assert.equal(bauerDeckelMs({ BRIDGE_BAUER_DECKEL_S: '0.05' }), 50);
+  for (const x of ['', '  ', 'x', '0', '-5']) assert.equal(bauerDeckelMs({ BRIDGE_BAUER_DECKEL_S: x }), 600_000, JSON.stringify(x));
+});
+
+const mkLahm = (b: Record<string, { ms: number; n: number }>): Deps & { aufrufe: string[]; ev: any[] } => {
+  const aufrufe: string[] = [], ev: any[] = [];
+  return { aufrufe, ev,
+    bauen: async (x) => { aufrufe.push(x); await new Promise((r) => setTimeout(r, b[x]?.ms ?? 400)); return { bauer: x, ok: true, diff: diffN(b[x]?.n ?? 3) }; },
+    schnell: async () => gruen,
+    ledger: (e) => ev.push(e) };
+};
+test('Zeitdeckel: beide Bauer zu langsam → zerlegen: true, kein GLM-Aufruf', async () => {
+  const d = mkLahm({ [FLASH]: { ms: 400, n: 3 }, [DEEPSEEK]: { ms: 400, n: 2 } });
+  const l = await rennen(d, A, { env: { BRIDGE_BAUER_DECKEL_S: '0.05' } });
+  assert.equal(l.zerlegen, true); assert.equal(l.sieger, null);
+  assert.equal(d.aufrufe.includes(GLM), false, 'keine Eskalation an glm-5.3');
+  assert.deepEqual(d.ev[0].bauer, [FLASH, DEEPSEEK]);
+});
+test('Zeitdeckel: nur ein Bauer zu langsam → der schnelle siegt (ohne Deckel gewänne der kleinere Diff), kein zerlegen', async () => {
+  const d = mkLahm({ [FLASH]: { ms: 0, n: 6 }, [DEEPSEEK]: { ms: 400, n: 2 } });
+  const l = await rennen(d, A, { env: { BRIDGE_BAUER_DECKEL_S: '0.05' } });
+  assert.equal(l.sieger?.bauer, FLASH); assert.equal(!!l.zerlegen, false);
+  assert.equal(d.aufrufe.includes(GLM), false);
+  assert.equal(diffGroesse(l.sieger!.diff), 6);
 });

@@ -96,6 +96,20 @@ export function waehle(ks: Kandidat[]): { sieger: Kandidat | null; abgelehnt: { 
 }
 
 // ---- Semaphor für schwere Prüfläufe ------------------------------------------------------------------------------------------------
+// Zeitdeckel je Bauer (Obergrenze: Vorgabe 600 s): reißt er, ist der Punkt zu groß und wird zerlegt statt eskaliert (offen-v2-0811.md).
+export const bauerDeckelMs = (env: Env = process.env) => {
+  const roh = String(env.BRIDGE_BAUER_DECKEL_S ?? '').trim(), n = Number(roh);
+  return roh !== '' && Number.isFinite(n) && n > 0 ? n * 1000 : 600_000;
+};
+export const DECKEL_LOG = 'deckel';
+/** Das Bauen eines Bauern mit Zeitlimit: Überschreitung → abgebrochenes Ergebnis mit log 'deckel' (der Bauer läuft im Hintergrund aus, der Strang wartet nicht). */
+async function mitDeckel(p: Promise<BauErgebnis>, bauer: string, ms: number): Promise<BauErgebnis> {
+  let t: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([p, new Promise<BauErgebnis>((res) => { t = setTimeout(() => res({ bauer, ok: false, diff: '', log: DECKEL_LOG }), ms); })]);
+  } finally { if (t) clearTimeout(t); }
+}
+
 export const maxPruefLaeufe = (env: Env = process.env) => { const n = Math.floor(Number(env.BRIDGE_PRUEFLAEUFE)); return Number.isFinite(n) && n >= 1 ? n : 3; };
 export class Semaphor {
   private frei: number; private warten: (() => void)[] = []; spitze = 0; private laufend = 0;
@@ -144,7 +158,8 @@ export interface Deps {
   ledger?(e: { id: string; bauer: string[]; sieger: string | null; abgelehnt: { bauer: string; grund: string }[] }): void;
   jetzt?(): number;
 }
-export interface Lauf { auftrag: Auftrag; sieger: BauErgebnis | null; verlierer?: { bauer: string; diff: string; at: number; benutzt?: boolean }; fixrunden: number; logs: string[] }
+export interface Lauf { auftrag: Auftrag; sieger: BauErgebnis | null; verlierer?: { bauer: string; diff: string; at: number; benutzt?: boolean }; fixrunden: number; logs: string[]; /** Alle Bauer über dem Zeitdeckel: der Punkt ist zu groß — zerlegen statt eskalieren. */
+  zerlegen?: boolean }
 export const VERLIERER_MS = 24 * 3600_000;
 
 const pruefe = async (d: Deps, a: Auftrag, r: BauErgebnis): Promise<Kandidat> =>
@@ -153,7 +168,8 @@ const pruefe = async (d: Deps, a: Auftrag, r: BauErgebnis): Promise<Kandidat> =>
 /** Ein Best-of-N-Lauf: bauen (parallel), prüfen, wählen; scheitern alle → glm-5.3 mit allen Fehlerlogs. Ledger-Hook je Lauf. */
 export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statistik } = {}): Promise<Lauf> {
   const bauer = bauerFuer(a.dateien, o.env, o.stat);
-  const ks = await Promise.all(bauer.map(async (b) => pruefe(d, a, await d.bauen(b, a).catch((e) => ({ bauer: b, ok: false, diff: '', log: String(e) })))));
+  const deckelS = bauerDeckelMs(o.env);
+  const ks = await Promise.all(bauer.map(async (b) => pruefe(d, a, await mitDeckel(d.bauen(b, a).catch((e) => ({ bauer: b, ok: false, diff: '', log: String(e) })), b, deckelS))));
   const rf = rangfolge(ks);
   let abgelehnt = rf.abgelehnt, sieger: Kandidat | null = null;
   const lauf: Lauf = { auftrag: a, sieger: null, fixrunden: 0, logs: [] };
@@ -167,10 +183,11 @@ export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statist
   }
   if (sieger) for (const k of rf.im) if (k !== sieger && !rote.has(k)) abgelehnt = abgelehnt.concat({ bauer: k.bauer, grund: `größerer Diff (${diffGroesse(k.diff)} gegen ${diffGroesse(sieger.diff)})` });
   lauf.sieger = sieger;
+  if (ks.length > 0 && ks.every((k) => k.log === DECKEL_LOG)) lauf.zerlegen = true;   // zu großer Punkt: Signal an den Plan, keine Eskalation
   if (bauer.length === 2) zaehle(o.stat ?? neueStatistik(), sieger?.bauer ?? null);
-  if (!sieger && bauer[0] !== OPUS) {
+  if (!sieger && !lauf.zerlegen && bauer[0] !== OPUS) {
     const logs = lauf.logs.concat(abgelehnt.map((x) => `${x.bauer}: ${x.grund}`), ks.map((k) => k.schnell?.log ?? k.log ?? '').filter(Boolean));
-    const k = await pruefe(d, a, await d.bauen(GLM, a, { fehlerlogs: logs }).catch((e) => ({ bauer: GLM, ok: false, diff: '', log: String(e) })));
+    const k = await pruefe(d, a, await mitDeckel(d.bauen(GLM, a, { fehlerlogs: logs }).catch((e) => ({ bauer: GLM, ok: false, diff: '', log: String(e) })), GLM, deckelS));
     bauer.push(GLM); lauf.logs = logs;
     const w = waehle([k]); sieger = w.sieger; abgelehnt = abgelehnt.concat(w.abgelehnt); lauf.sieger = sieger;
   }

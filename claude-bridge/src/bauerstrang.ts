@@ -89,6 +89,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     for (const k of geschlossen.keys()) { if (geschlossen.size <= 50) break; geschlossen.delete(k); }   // bounded: oldest out (loser retry only matters for 24 h)
   }
   for (const s of subs.values()) await removeWorktree(s.dir).catch(() => {});
+  if (lauf.zerlegen) return { ok: false, text: '', grund: 'Punkt zu groß (Deckel überschritten) — im Plan kleiner schneiden' };
   if (!ok) return { ok: false, text: '', grund: sieger ? 'Best-of-N: Sieger-Diff ließ sich nicht anwenden' : 'Best-of-N: kein Bauer lieferte einen sauberen Diff' };
   return { ok: true, text: texte.get(sieger!.bauer) ?? '', grund: '', modell: `${sieger!.bauer} (Best-of-N)` };
 }
