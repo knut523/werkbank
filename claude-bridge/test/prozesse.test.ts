@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { starte, beenden, liste, aktivitaet, registerDatei, vorlaufLesen, procStart, lebt, beendenProz, laeuft } from '../src/prozesse.ts';
+import { starte, beenden, liste, registerDatei, vorlaufLesen, procStart, lebt, beendenProz, laeuft } from '../src/prozesse.ts';
 
 const tot = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e: any) { return e.code === 'ESRCH'; } };
 const warte = async (f: () => boolean, ms = 5000) => { for (let t = 0; t < ms && !f(); t += 50) await new Promise((r) => setTimeout(r, 50)); return f(); };
@@ -45,6 +45,7 @@ test('fremde PID (pid passt, Startzeit nicht) wird nicht getötet', async () => 
 test('natürliches Ende trägt aus; zuletztAktiv rückt bei Ausgabe vor', async () => {
   let t = 1000;
   const { id, kind } = starte('sh', ['-c', 'sleep 0.3; echo hallo; sleep 0.3'], { besitzer: 'b', art: 'test', env: process.env, jetzt: () => t } as any);
+  const aktivitaet = (i: string) => liste().find((x) => x.id === i)?.zuletztAktiv ?? null;
   const a0 = aktivitaet(id)!;
   t = 5000;
   assert.ok(await warte(() => aktivitaet(id)! > a0));

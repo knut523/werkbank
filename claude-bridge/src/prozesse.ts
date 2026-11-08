@@ -123,7 +123,6 @@ export function starte(cmd: string, args: string[], o: StarteOpt): { id: string;
   return { id, kind };
 }
 
-export const aktivitaet = (id: string): number | null => reg.get(id)?.zuletztAktiv ?? null;
 export const liste = (f?: { besitzer?: string; art?: string }): Eintrag[] =>
   [...reg.values()].filter((e) => (!f?.besitzer || e.besitzer === f.besitzer) && (!f?.art || e.art === f.art)).map((e) => ({ ...e }));
 

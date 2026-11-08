@@ -195,9 +195,9 @@ export const BEFUNDE_FORM = [
 
 // ---------- Review-Dedupe (Wave 21 B3) ----------
 
-/** Eine Review je (headSha, baseSha, Zahl der Kommentare) nur einmal — gleicher Schlüssel, gleiches Urteil. WERKBANK_REVIEW_DEDUPE=aus schaltet ab. */
+/** Eine Review je (headSha, baseSha, Kommentar-Abdruck) nur einmal — gleicher Schlüssel, gleiches Urteil. WERKBANK_REVIEW_DEDUPE=aus schaltet ab. */
 export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_REVIEW_DEDUPE !== 'aus';
-export const reviewSchluessel = (k: { headSha: string; baseSha: string | null; kommentare: number | string; deep?: boolean }) => `${k.headSha}|${k.baseSha ?? '-'}|${k.kommentare}${k.deep ? '|deep' : ''}`;
+export const reviewSchluessel = (k: { headSha: string; baseSha: string | null; kommentare: string; deep?: boolean }) => `${k.headSha}|${k.baseSha ?? '-'}|${k.kommentare}${k.deep ? '|deep' : ''}`;
 /** Obergrenzen der GitHub-Abfrage (KONTEXT_Q in prreview.ts). Liefert eine Liste genau so viele, ist sie womöglich abgeschnitten. */
 export const KONTEXT_GRENZEN = { comments: 100, reviews: 50, threads: 100, threadComments: 20 } as const;
 type KommentarKontext = { comments: { author?: string | null; body: string; at?: string }[]; reviews: { author?: string | null; state?: string; body: string; at?: string }[]; threads: { path?: string; line?: number | null; comments: { author?: string | null; body: string; at?: string }[] }[] };
@@ -215,6 +215,3 @@ export const reviewSchluesselFuer = (k: { headSha: string; baseSha: string | nul
 /** Abfrage nach einem wiederverwendbaren Review: nur vollständige (`entwurf.vollstaendig === true`); ein von Hand angefordertes Review (`trigger: 'hand'`) wird nie dedupliziert. */
 export const dedupeAbfrage = (r: { _id: unknown; repo: string; number: number; head: string; trigger?: string }, schluessel: string | null) =>
   schluessel && r.trigger !== 'hand' ? { repo: r.repo, number: r.number, head: r.head, schluessel, status: 'fertig', 'entwurf.vollstaendig': true, _id: { $ne: r._id }, paket: { $exists: true } } : null;
-/** Alle Kommentare des PR (Konversation, Reviews mit Text, Inline-Kommentare) als eine Zahl. */
-export const kommentarZahl = (k: { comments: unknown[]; reviews: { body: string }[]; threads: { comments: unknown[] }[] } | null | undefined) =>
-  k ? k.comments.length + k.reviews.filter((r) => r.body?.trim()).length + k.threads.reduce((n, t) => n + t.comments.length, 0) : 0;
