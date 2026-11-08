@@ -120,9 +120,10 @@ test('P8: Deckel → zug sieht Abbruch; Unter-Worktree wird erst nach dessen End
 
 test('P8: Bauer ignoriert den Abbruch über die Gnadenfrist hinaus → Worktree bleibt, wird erst nach seinem Ende entfernt, nie beschrieben danach', async () => {
   const { wurzel, cwd } = repo(); const dirs: string[] = []; let schriebDanach = false; const meldungen: string[] = [];
+  let freigabe!: () => void; const tor = new Promise<void>((r) => { freigabe = r; });   // der Test lässt die Bauer enden, keine feste Wartezeit
   const stur = async (dir: string, _m: string) => {
     dirs.push(dir); writeFileSync(join(dir, 'src/a.ts'), zeilen(2));
-    await new Promise((r) => setTimeout(r, 400));   // ignoriert das Signal
+    await tor;   // ignoriert das Signal
     if (!existsSync(dir)) schriebDanach = true; else writeFileSync(join(dir, 'src/a.ts'), zeilen(3));
     return { ok: false, text: '', grund: 'spät' };
   };
@@ -130,7 +131,9 @@ test('P8: Bauer ignoriert den Abbruch über die Gnadenfrist hinaus → Worktree 
     await bestofnStrang({ cwd, id: 'p8b', prompt: 'ändere src/a.ts', env: { BRIDGE_BAUER_DECKEL_S: '0.05', BRIDGE_ABBRUCH_FRIST_S: '0.05' }, zug: stur, pruefe, status: (t) => meldungen.push(t) });
     assert.ok(dirs.length >= 2 && dirs.every((x) => existsSync(x)), 'Worktrees stehen noch, solange der Bauer läuft');
     assert.equal(meldungen.filter((t) => t.includes('Abbruch unbestätigt')).length, dirs.length, 'eine Zeile je Bauer');
-    await new Promise((r) => setTimeout(r, 700));
+    freigabe();
+    const ende = Date.now() + 10_000;
+    while (dirs.some((x) => existsSync(x)) && Date.now() < ende) await new Promise((r) => setTimeout(r, 20));
     assert.ok(dirs.every((x) => !existsSync(x)), 'nach dem Ende entfernt');
     assert.equal(schriebDanach, false);
   } finally { rmSync(wurzel, { recursive: true, force: true }); }
