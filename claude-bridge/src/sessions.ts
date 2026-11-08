@@ -1822,7 +1822,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Parallel dazu: die Claude-Konten der Person (ohne Werkbank: nur der Schlüssel aus der Anfrage).
   // kontenFehlen: die Liste kam nicht (nur „chat“) — dann vor jeder „ausgeschöpft“-Meldung neu laden (Hotfix 15b).
   let kontenFehlen = false;
-  const ladeKonten = () => (fruehKonten && !gewartet ? fruehKonten : req.accounts!()).catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
+  // frisch=true: nach einem Limit neu laden — die frühe Liste ist dann veraltet und darf nicht wiederverwendet werden.
+  const ladeKonten = (frisch = false) => (fruehKonten && !gewartet && !frisch ? fruehKonten : req.accounts!()).catch((e: any) => { log('konten nicht geladen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); return null; });
   const accountsP = (req.accounts ? ladeKonten() : Promise.resolve(null))
     .then((list) => { kontenFehlen = !!req.accounts && list === null; return normalizeAccounts(list, req.token); });
   let extra = '';
@@ -2153,7 +2154,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         else markExhausted(user, acct, live.rateLimited.resetsAt);
         if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
-          const list = await ladeKonten();
+          const list = await ladeKonten(true);
           if (list) {
             kontenFehlen = false;
             const tried = new Set(queue.slice(0, i + 1).map((a) => `${fp(a.token)}:${a.chainModel ?? ''}`));
