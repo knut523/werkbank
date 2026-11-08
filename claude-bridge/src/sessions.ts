@@ -22,6 +22,7 @@ import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, s
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
+import { starte, beenden } from './prozesse.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { testAccount } from './accounts.ts';
@@ -2456,18 +2457,22 @@ export function jcodePromptArg(p: string): string {
 // Gegenprüfung (B10): je Prozess frisch (mkdtemp, 0700) statt eines festen, vorhersagbaren Pfads in /tmp
 let ghLeer: string | null = null;
 const JCODE_GH_LEER = () => (ghLeer ??= mkdtempSync(join(tmpdir(), 'werkbank-jcode-gh-')));
-function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+// R4 (Testnaht): exportiert, damit prozesse-jcode.test.ts die Gruppe-Beendigung direkt prüfen kann.
+export function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000',
     // Pass C (Runde 3): zweite Linie hinter dem Shell-Wächter — gh ohne Konto, git ohne SSH-Schlüssel und ohne Passwortabfrage
     GH_CONFIG_DIR: JCODE_GH_LEER(), GIT_SSH_COMMAND: 'ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes', GIT_TERMINAL_PROMPT: '0', ...o.extra };
   return new Promise((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { cwd: o.cwd, env });
+    // R4 (Prozessregister): eigene Gruppe + Register; Timeout/Abbruch → beenden (Gruppe TERM→KILL), damit Enkel mitsterben.
+    const r = starte(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { besitzer: 'jcodeSpawn', art: 'jcode', cwd: o.cwd, env });
+    const c = r.kind;
     let so = '', se = '';
     c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
-    const stopper = setInterval(() => { if (o.abbruch?.()) c.kill('SIGTERM'); }, 2000);
+    let zu = false;
+    const timer = setTimeout(() => { zu = true; void beenden(r.id); }, o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (!zu && o.abbruch?.()) { zu = true; clearInterval(stopper); void beenden(r.id); } }, 2000);
     c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
     c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
   });
@@ -2583,15 +2588,18 @@ export const OPENCODE_BIN = () => process.env.BRIDGE_OPENCODE_BIN || join(homedi
  *  Test 05.11.: auf der Box ist opencode installiert und lief sonst still an. Danach übernimmt Claude. */
 export const opencodeAn = () => process.env.BRIDGE_JCODE_OPENCODE === 'on' && existsSync(OPENCODE_BIN());
 export const jcodeReihe = (opencode = opencodeAn()): ('jcode' | 'opencode')[] => (opencode ? ['jcode', 'jcode', 'opencode'] : ['jcode', 'jcode']);
-function opencodeSpawn(o: { cwd: string; prompt: string; timeoutS: number; abbruch: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+export function opencodeSpawn(o: { cwd: string; prompt: string; timeoutS: number; abbruch: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   // ponytail: opencode ohne eigenes Profil und ohne Buchung — nur der letzte Rückfall vor Claude; Ausgabe = Antworttext.
   return new Promise((res) => {
-    const c = spawn(OPENCODE_BIN(), ['run', o.prompt], { cwd: o.cwd, env: { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8' } });
+    // R4 (Prozessregister): eigene Gruppe + Register; Timeout/Abbruch → beenden (Gruppe TERM→KILL), damit Enkel mitsterben.
+    const r = starte(OPENCODE_BIN(), ['run', o.prompt], { besitzer: 'opencodeSpawn', art: 'opencode-run', cwd: o.cwd, env: { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8' } });
+    const c = r.kind;
     let so = '', se = '';
     c.stdout.on('data', (b) => { so = (so + b).slice(-400_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
-    const stopper = setInterval(() => { if (o.abbruch()) c.kill('SIGTERM'); }, 2000);
+    let zu = false;
+    const timer = setTimeout(() => { zu = true; void beenden(r.id); }, o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (!zu && o.abbruch()) { zu = true; clearInterval(stopper); void beenden(r.id); } }, 2000);
     c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
     c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
   });
