@@ -35,7 +35,7 @@ const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK ==
 import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
-import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from './bauerstrang.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, pruefUrteil } from './bauerstrang.ts';
 import { bauZug, linksNachDraussen, urteilAus, verifiziererPrompt, MAX_RUNDEN, type BauDeps, type Verdikt } from './oc2strang.ts';
 import { oc2McpToken } from './oc2mcp.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
@@ -2765,8 +2765,7 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
   const bestofnPruefe = async (dir: string, base: string, art: 'schnell' | 'voll') => {
     const fest = await strangFest(live.key, cwd);
     const r = await pruefenSauber(dir, base, { fest, maxMs: 600_000, ...(art === 'schnell' ? { nur: (n: string) => /tsc|typ|lint/i.test(n) } : {}) });
-    const rot = r.ergebnisse.filter((x) => !x.ok);
-    return { ok: !rot.length, log: rot.map((x) => `${x.name}: ${x.ausgabe.slice(-800)}`).join('\n'), tsc: !rot.some((x) => /tsc|typ/i.test(x.name)), lint: !rot.some((x) => /lint/i.test(x.name)) };
+    return pruefUrteil(r);
   };
   const deps: BauDeps = {
     status: (t) => emitStatus(live, t),

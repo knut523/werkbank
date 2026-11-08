@@ -33,6 +33,13 @@ async function anwenden(cwd: string, diff: string, rueck = false): Promise<boole
   try { const f = join(dir, 'p.diff'); writeFileSync(f, diff.endsWith('\n') ? diff : diff + '\n'); return (await git(cwd, 'apply', '--binary', ...(rueck ? ['-R'] : []), f)).code === 0; }
   finally { rmSync(dir, { recursive: true, force: true }); }
 }
+/** Kandidaten-Diff gegen base (Index nach `add -A`), ohne Renames. */
+export async function kandidatDiff(dir: string, base: string): Promise<string> {
+  await git(dir, 'add', '-A');
+  // --no-renames: ein Umbenennen aus dem Testmuster erscheint als gelöschte Testdatei + neue Datei (tamperGruende liest sonst nur das Ziel);
+  // core.quotepath=false: Nicht-ASCII-Pfade bleiben im Header unquotiert lesbar.
+  return (await git(dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--binary', '--no-color', '--no-renames', base)).out;
+}
 /** Betroffene Tests: geänderte *.test.ts mit `node --test` im nächsten Ordner mit package.json (über den Semaphor). */
 async function betroffeneTests(dir: string, diff: string): Promise<{ ok: boolean; log: string }> {
   const dateien = [...diff.matchAll(/^diff --git a\/\S+ b\/(\S+)$/gm)].map((m) => m[1]).filter((f) => /\.test\.[cm]?[jt]s$/.test(f));
@@ -78,8 +85,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       const p = op?.fehlerlogs?.length ? `${plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : plan;
       const r = await o.zug(s.dir, bauer, p, op?.signal);
       texte.set(bauer, r.text);
-      await git(s.dir, 'add', '-A');
-      const diff = (await git(s.dir, 'diff', '--cached', '--binary', '--no-color', s.base)).out;
+      const diff = await kandidatDiff(s.dir, s.base);
       // Schutzzone am tatsächlichen Diff (nicht nur an Pfaden im Plantext): berührt der Kandidat sie, darf er nicht gewinnen. Abschalten: BRIDGE_DIFFZONE=aus.
       if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
         const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
@@ -97,7 +103,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     const r = await mitDeckel(async (signal) => { const z = await o.zug(dir, modell, prompt, signal); text = z.text; return { bauer: modell, ok: z.ok, diff: '', log: z.ok ? '' : z.grund }; }, modell, prueferMs, abbruchFristMs(env)).catch(() => null);
     return !r || r.log === DECKEL_LOG ? '' : text;
   };
-  const diffVon = async (dir: string, base: string) => { await git(dir, 'add', '-A'); return (await git(dir, 'diff', '--cached', '--binary', '--no-color', base)).out; };
+  const diffVon = kandidatDiff;
   const neueTests = async (dir: string) => (await git(dir, 'ls-files', '-o', '--exclude-standard')).out.split('\n').filter((f) => /\.test\.[cm]?[jt]s$/.test(f));
   async function testLauf(dir: string, f: string): Promise<{ ok: boolean; log: string }> {
     let d = dirname(f); while (d !== '.' && !existsSync(join(dir, d, 'package.json'))) d = dirname(d);
@@ -177,7 +183,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     ledger: schleifeAn ? (e) => { ledgerEvent = e; } : emittiereLauf,
   };
   const lauf = await rennen(deps, { id: o.id, plan: o.prompt, dateien }, { env, stat });
-  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen; rot → Kette erschöpft → Sonnet.
+  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen ; rot → Kette erschöpft → Sonnet.
   if (schleifeAn && lauf.sieger && !geschleift.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
     const v = await strangPruefen(lauf.sieger).catch((e) => ({ ok: false, log: String(e) }));
     if (!v.ok) { lauf.logs.push(`${lauf.sieger.bauer}: Strang-Prüfung rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
