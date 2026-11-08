@@ -8,8 +8,9 @@ import { mkdtempSync, realpathSync, writeFileSync, chmodSync, existsSync, mkdirS
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3498;
+const [PORT, P1, P2] = await freiePorts(3);   // freie Ports je Lauf (ports-p5), nichts fest verdrahtet
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-oc2-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-oc2-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-oc2-'));
@@ -19,7 +20,6 @@ const BIN = mkdtempSync(join(tmpdir(), 'bin-oc2-'));
 const JCODE_LIEF = join(BIN, 'jcode-lief');
 const OC2 = mkdtempSync(join(tmpdir(), 'oc2-home-'));
 const KAPUTT = join(OC2, 'kaputt');
-const P1 = 43000 + (process.pid % 3000) * 2, P2 = P1 + 1;   // eigene Ports je Lauf
 const tok = (s: string) => `sk-ant-oat01-oc2-${s}-${'x'.repeat(24)}`;
 const MEL = { id: 'melious', label: 'Melious', token: `sk-mel-oc2-${'y'.repeat(24)}`, kind: 'melious', rest: 150_000, fallback: false, rollen: { leser: ['glm-5.3-flash'] } };
 writeFileSync(join(BIN, 'jcode'), `#!/bin/sh\ntouch ${JCODE_LIEF}\necho '{"text":"Antwort aus jcode","model":"glm-5.3-flash","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0}}'\n`);
@@ -146,4 +146,12 @@ test('mit der Brücke enden ihre Server', async () => {
   await new Promise((r) => proc.once('exit', r));
   await new Promise((r) => setTimeout(r, 300));
   for (const p of pids) assert.throws(() => process.kill(p, 0), 'Server beendet');
+});
+
+// ports-p5: feste Testports waren im Parallelauf rot (ein fremder Dienst auf dem Port antwortet für die Testbrücke).
+// Diese Datei nimmt ihre Ports aus freiePorts(); der Wächter hält das fest.
+test('keine feste Portnummer in dieser Datei (ports-p5)', () => {
+  const quelle = readFileSync(new URL('./opencode2-bruecke.test.ts', import.meta.url), 'utf8');
+  assert.match(quelle, /await freiePorts\(/, 'Ports kommen aus freiePorts');
+  assert.doesNotMatch(quelle, /PORT\s*=\s*[0-9]{4,5}|\|\| ?[0-9]{4,5}[^0-9]|port[s]?:\s*[0-9]{4,5}/, 'feste Portnummer');
 });
