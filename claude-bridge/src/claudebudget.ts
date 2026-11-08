@@ -225,7 +225,7 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
 }
 const meliousFrei = new Map<string, boolean>();
 const safeId = (s: string) => /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);   // wie sessions.ts; nur Schlüssel der Melious-Map, keine Töpfe
-/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Die Setzung gilt unter der rohen UND der gehashten Kennung (safeId): der Leser bildet safeId(o.userId), der Aufrufer darf roh übergeben. Eine Person ohne eigenen Eintrag fällt auf die prozessweite Setzung (boolean) zurück; steht auch die nicht, gilt Melious als frei (erster Zug nach dem Start, frischer Prozess). Ohne userId bleibt der Default „nicht frei“ (altes Verhalten). */
+/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Die Setzung gilt unter der rohen UND der gehashten Kennung (safeId): der Leser bildet safeId(o.userId), der Aufrufer darf roh übergeben. Eine Person ohne eigenen Eintrag fällt auf die prozessweite Setzung (boolean) zurück; steht auch die nicht, gilt Melious als nicht frei (altes Verhalten). handleTurn setzt den Eintrag vor der Zulassung, darum trifft der Rückfall nur Aufrufer ohne userId. */
 export const setzeMelious = (userId: string | boolean, frei?: boolean) => { if (typeof userId === 'boolean') { meliousFrei.set('', userId); return; } const f = frei === true; meliousFrei.set(userId, f); meliousFrei.set(safeId(userId), f); };
 
 /** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
