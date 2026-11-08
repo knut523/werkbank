@@ -7,11 +7,11 @@
 # Checks (a–f); exit 0 = GREEN, 1 = RED. Warnings do not change the result.
 #   a) at least one commit base..head, diff not empty           (against "done" without a commit)
 #   b) every new export has a call site outside the tests       (against "stops at the module")
-#   c) affected test files one by one, 120 s cap, duration      (against "green" while a test hangs)
+#   c) affected test files one by one, TMO cap, duration, pass>0 (against "green" while a test hangs or all is skipped)
 #   d) test files: asserts/test blocks don't shrink, no skip     (tamper guard; imports allowed)
 #   e) tsc: no file gains type errors compared to base
 #   f) warning: module state (top-level Map/let) without a file write  (persistence)
-# Env: ABNAHME_TEST_TIMEOUT_S (per file, default 150), ABNAHME_TSC=aus, ABNAHME_TESTS=aus.
+# Env: ABNAHME_TEST_TIMEOUT_S (per file, default 240), ABNAHME_TSC=aus, ABNAHME_TESTS=aus.
 set -uo pipefail
 BASE=${1:?usage: abnahme.sh <base> [<head>]}; HEAD_REF=${2:-HEAD}
 ROOT=$(git rev-parse --show-toplevel) || exit 2; cd "$ROOT"
@@ -19,6 +19,16 @@ HERE=$ROOT/scripts; RT=$ROOT/.runtime
 [ "$(git rev-parse "$HEAD_REF")" = "$(git rev-parse HEAD)" ] || { echo "abnahme: <head> must be checked out (tests and tsc run on the working tree)"; exit 2; }
 TMO=${ABNAHME_TEST_TIMEOUT_S:-240}   # leitstand.test.ts alone takes ~2 min
 ROT=0; WARN=0
+# Abort (INT/TERM/error exit) between mongod start and the regular cleanup: kill mongod, remove $TM and $TM.log, stop the running test.
+MP=""; TM=""; TPID=""; OUTF=""
+aufraeumen() {
+  [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
+  [ -n "$MP" ] && { kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; }
+  [ -n "$TM" ] && rm -rf "$TM" "$TM.log"; [ -n "$OUTF" ] && rm -f "$OUTF"
+  MP=""; TM=""; TPID=""; OUTF=""
+}
+trap aufraeumen EXIT
+trap 'aufraeumen; exit 143' INT TERM HUP
 rot()  { echo "  RED   $*"; ROT=1; }
 warn() { echo "  WARN  $*"; WARN=1; }
 ok()   { echo "  ok    $*"; }
@@ -59,7 +69,7 @@ elif [ ${#TESTS[@]} -eq 0 ]; then warn "no affected test file found — is there
 else
   # Free ports instead of fixed ones (a foreign mongod on a fixed port = tests against someone else's DB).
   frei() { local p; for p in $(seq "$1" $(( $1 + 200 ))); do (echo > "/dev/tcp/127.0.0.1/$p") 2>/dev/null || { echo "$p"; return; }; done; }
-  MP=""; TP=${ABNAHME_MONGO_PORT:-$(frei 28100)}
+  TP=${ABNAHME_MONGO_PORT:-$(frei 28100)}
   # All fixed test ports of the suites (WERKBANK_TEST_*PORT || nnnn) onto free ports — a foreign server on a fixed port answers in place of the test server.
   PORTENV=""; nx=3700
   for v in $(grep -rhoE 'WERKBANK_TEST_[A-Z_]*PORT' "$ROOT"/web/test "$ROOT"/web/app/test "$ROOT"/claude-bridge/test 2>/dev/null | sort -u); do
@@ -75,15 +85,17 @@ else
   fi
   for t in $(printf '%s\n' "${!TESTS[@]}" | sort); do
     pkg=${t%%/*}; rel=${t#*/}; s=$(date +%s)
-    out=$(cd "$ROOT/$pkg" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" SAUBER_ENV_KEEP=MONGO_URI_WERKBANK \
-      env $PORTENV timeout "$TMO" "$HERE/sauber-env.sh" node --test --test-timeout=120000 "$rel" 2>&1); rc=$?; d=$(( $(date +%s)-s ))
+    OUTF=$(mktemp)   # in the background + wait, so that a signal reaches the trap while the test runs
+    (cd "$ROOT/$pkg" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" SAUBER_ENV_KEEP=MONGO_URI_WERKBANK \
+      env $PORTENV timeout "$TMO" "$HERE/sauber-env.sh" node --test --test-timeout=120000 "$rel" > "$OUTF" 2>&1) & TPID=$!
+    wait "$TPID"; rc=$?; TPID=""; out=$(cat "$OUTF"); rm -f "$OUTF"; OUTF=""; d=$(( $(date +%s)-s ))
     p=$(echo "$out" | sed -n 's/^# pass //p' | tail -1); fl=$(echo "$out" | sed -n 's/^# fail //p' | tail -1); c=$(echo "$out" | sed -n 's/^# cancelled //p' | tail -1)
     if [ $rc -eq 124 ]; then rot "$t: hangs (> ${TMO}s, killed)"
     elif [ $rc -ne 0 ] || [ "${fl:-0}" != 0 ] || [ "${c:-0}" != 0 ]; then rot "$t: rc=$rc pass=${p:-?} fail=${fl:-?} cancelled=${c:-0} (${d}s)"; echo "$out" | grep -E '^not ok|error:' | head -4 | sed 's/^/          /'
     elif [ "${p:-0}" = 0 ]; then rot "$t: pass=${p:-?} — no test passed (empty file or everything skipped) (${d}s)"
     else ok "$t: pass=$p (${d}s)"; fi
   done
-  [ -n "$MP" ] && { kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; }
+  aufraeumen
 fi
 
 echo "== d) tamper guard on test files"
