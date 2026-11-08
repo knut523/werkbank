@@ -135,3 +135,71 @@ test('run(): nicht startbarer Befehl mit Abbruchsignal → {code:127} statt Ausn
   assert.equal(res.status, 0, `Kindprozess abgestürzt (status ${res.status}): ${String(res.stderr ?? '').split('\n').slice(0, 3).join(' | ')}`);
   assert.match(String(res.stdout), /ERGEBNIS \{"code":127/, `statt {code:127}: ${String(res.stdout).slice(-200)}`);
 });
+
+// ---- Gegenprüfung R5 (Runde 2), Befund 1: der Abbruch setzt kein Abbruch-Merkmal ---------------------------------
+// Timeout: `killed = true` → Code 124 (run) bzw. `zeit` → ok:false (pruefLauf). Der Abbruchpfad (`brichAb` → beenden)
+// setzt das Merkmal nicht: das Ergebnis ist allein der Ausstiegscode des beendeten Prozesses. Ein Befehl, der SIGTERM
+// fängt und sauber mit 0 endet (Wrapper-/Prüfskript mit eigenem Aufräumen), wird deshalb nach abort() als Erfolg
+// gemeldet — der Aufrufer (pruefen() → code 0 = grün, betroffeneTests() → ok) hält eine abgebrochene Prüfung für grün.
+// Erwartet wird wie beim Timeout ein Fehlschlag (Doku an run(): „Zeitlimit oder Abbruchsignal → beenden(id) …
+// (Code 124)“; die bestehenden Abbruch-Tests prüfen `notEqual(r.code, 0)` / `ok === false`).
+test('run(): Abbruch nach dem Start ist kein Erfolg (Code 0), auch wenn der Befehl SIGTERM fängt', async () => {
+  const ac = new AbortController();
+  const besitzer = 'r5-run-abort-faengt-term';
+  const self = join(dir, 'self-abort-run');
+  let sh = 0;
+  try {
+    // Falle steht vor der PID-Ausgabe: die Datei beweist, dass der Befehl SIGTERM fängt und selbst mit 0 endet.
+    const p = run('sh', ['-c', `trap "exit 0" TERM; echo $$ > ${self}; sleep 600`], { cwd: dir, besitzer, signal: ac.signal });
+    assert.ok(await warte(() => existsSync(self) && readFileSync(self, 'utf8').trim() !== ''), 'Kind gestartet (TERM-Falle steht)');
+    sh = Number(readFileSync(self, 'utf8').trim());
+    ac.abort();
+    const r = await p;
+    assert.notEqual(r.code, 0, `abgebrochener Lauf meldet Erfolg (code ${r.code}) — die Prüfung gilt dann als grün`);
+    assert.equal(liste({ besitzer }).length, 0, 'Register geleert');
+  } finally { ac.abort(); raeumeAuf(sh, 0); }
+});
+
+// Befund 1b: derselbe Abbruchpfad in pruefLauf — dort fehlt das `zeit`-Merkmal, `(rc ?? code) === 0` wird zu ok:true.
+test('pruefLauf: Abbruch nach dem Start ist kein grüner Lauf (ok), auch wenn der Befehl SIGTERM fängt', async () => {
+  const ac = new AbortController();
+  const besitzer = 'r5-pruef-abort-faengt-term';
+  const self = join(dir, 'self-abort-pruef');
+  let sh = 0;
+  try {
+    const p = pruefLauf(dir, 'sh', ['-c', `trap "exit 0" TERM; echo $$ > ${self}; sleep 600`], { timeoutMs: 60_000, besitzer, signal: ac.signal });
+    assert.ok(await warte(() => existsSync(self) && readFileSync(self, 'utf8').trim() !== ''), 'Kind gestartet (TERM-Falle steht)');
+    sh = Number(readFileSync(self, 'utf8').trim());
+    ac.abort();
+    const r = await p;
+    assert.equal(r.ok, false, 'abgebrochener Prüflauf meldet grün — der Aufrufer (betroffeneTests) nimmt das als bestandene Tests');
+    assert.equal(liste({ besitzer }).length, 0, 'Register geleert');
+  } finally { ac.abort(); raeumeAuf(sh, 0); }
+});
+
+// ---- Gegenprüfung R5 (Runde 2), Befund 2: Registereintrag ohne Frist ---------------------------------------------
+// Die Strukturregel des Plans (docs/plan-prozessregister.md) verlangt von JEDEM Kindprozess einen Registereintrag mit
+// „Besitzer, PID + Startzeit, Frist, letzte Aktivität“; die Start-Mini-Spec nennt `starte(cmd, args, { besitzer, art,
+// fristMs, cwd, env })`. Wächter (R10: `if (e.fristAt != null && jetzt > e.fristAt)`) und Anzeige (R11/R12: Spalte Frist)
+// lesen nur `fristAt` — ein Eintrag ohne Frist wird nie „überfällig“ und nie über den Wächter beendet. run() und
+// pruefLauf haben aber ein Zeitlimit (30 s bzw. 15 min, der Aufrufer setzt es), also ist ihre Frist bekannt; starte()
+// bekommt sie nicht mit (in der Schwester-Punkt R4 wurde genau das mit `fristMs: timeoutS * 1000` nachgezogen).
+test('run()/pruefLauf: Registereintrag trägt die Frist (Zeitlimit) — sonst wird der Lauf für Wächter und Anzeige nie überfällig', async () => {
+  const besitzer = 'r5-frist';
+  const timeoutMs = 5_000;
+  let p: Promise<{ code: number; out: string }> | undefined, q: Promise<{ ok: boolean; log: string }> | undefined;
+  try {
+    p = run('sleep', ['30'], { cwd: dir, besitzer, timeoutMs });
+    q = pruefLauf(dir, 'sleep', ['30'], { timeoutMs, besitzer });
+    const e = liste({ besitzer, art: 'run' })[0], f = liste({ besitzer, art: 'pruefung' })[0];
+    assert.ok(e && f, 'beide Läufe stehen im Register');
+    for (const [name, x] of [['run', e!], ['pruefLauf', f!]] as const) {
+      assert.notEqual(x.fristAt, null, `${name}: fristAt gesetzt (Frist = eigenes Zeitlimit) — sonst greift der Wächter nie`);
+      const d = x.fristAt! - x.startedAt;
+      assert.ok(d >= timeoutMs * 0.9 && d <= timeoutMs + 60_000, `${name}: Frist entspricht dem Zeitlimit (${d} ms statt ~${timeoutMs} ms)`);
+    }
+  } finally {
+    await beenden(besitzer, 3000).catch(() => { /* egal */ });
+    await Promise.allSettled([p, q]);
+  }
+});
