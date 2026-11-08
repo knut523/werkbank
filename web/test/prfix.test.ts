@@ -328,8 +328,8 @@ function fakeGithub(name: string, zweig: string, n: number) {
   return { gh, bare, kopf: () => git(['rev-parse', `refs/heads/${zweig}`], bare) };
 }
 
-function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?: string; base?: string; gate?: number; testsRot?: boolean; vorPush?: () => void; strangAendert?: boolean } = {}) {
-  const calls = { status: [] as { body: string; id: number | null }[], kommentar: [] as string[], melde: [] as string[], push: 0, started: 0 };
+function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?: string; base?: string; gate?: number; testsRot?: boolean; vorPush?: () => void; strangAendert?: boolean; besitzerCwd?: string; besitzerArbeit?: (prompt: string) => void } = {}) {
+  const calls = { status: [] as { body: string; id: number | null }[], kommentar: [] as string[], melde: [] as string[], push: 0, started: 0, gesendet: [] as string[] };
   let sk = 100;
   const d: any = {
     userById: async (id: string) => (id === 'u1' ? { id: 'u1' } : null),
@@ -348,7 +348,8 @@ function deps(gh: { gh: string; bare: string; kopf: () => string }, o: { zweig?:
       }
       return { id: 'strang1' };
     },
-    strandDoc: async () => ({ lastStatus: 'done' }),
+    strandDoc: async () => ({ lastStatus: 'done', cwd: o.besitzerCwd, ...(o.besitzerCwd ? { reviewReadyAt: new Date(NOW.getTime() + 60_000) } : {}) }),
+    ...(o.besitzerCwd ? { besitzer: async () => 'owner1', sendStrand: async (_f: any, _s: string, text: string) => { calls.gesendet.push(text); o.besitzerArbeit?.(text); } } : {}),
     status: async (_f: any, body: string, id: number | null) => { calls.status.push({ body, id }); return { id: id ?? ++sk, url: `https://github.com/c/${sk}` }; },
     kommentar: async (_f: any, body: string) => { calls.kommentar.push(body); return { id: 999, url: 'https://github.com/WirStrom1/x/pull/7#issuecomment-999' }; },
     tests: async () => ({ ausgefuehrt: true, grund: '', schritte: [{ name: 'npm run test', code: o.testsRot ? 1 : 0, minuten: 1, timedOut: false, tail: '' }], db: null, dbHinweis: null, md: '# Tests\n' }),
@@ -681,4 +682,48 @@ test('Paket 436: fix.json führt Punkte mit Kennung (nur gültige); ohne lesbare
   await F.fixTick(d);
   const f: any = await T.fixesCol().findOne({ _id: 'fix:p436b' as any });
   assert.equal(f.punkte.lesbar, false);
+});
+
+/** Arbeitsordner des Besitzer-Strangs: eigener Klon des Fake-GitHub auf `zweig`. */
+function besitzerKlon(gh: { gh: string; bare: string }, name: string, zweig: string) {
+  const w = mkdtempSync(join(tmpdir(), 'besitzer-'));
+  git(['clone', '-q', `file://${gh.bare}`, w], tmpdir());
+  git(['checkout', '-q', zweig], w);
+  return w;
+}
+const besitzerCommit = (w: string, paket: string) => {
+  writeFileSync(join(w, 'a.ts'), 'export const bar = 1;\n'); git(['commit', '-qam', 'fix: rename foo to bar'], w);
+  writeFileSync(join(paket, 'fix.json'), JSON.stringify({ kurz: 'Renamed foo to bar.', tests: 'npm test', punkte: [{ punkt: 'rename foo', stand: 'fixed', commit: git(['rev-parse', 'HEAD'], w).slice(0, 7), beleg: 'a.ts:1' }] }));
+};
+
+test('Besitzer-Strang wiederverwendet: Fix-Worktree ist sein cwd, Prompt nennt es, Commit dort wird erkannt und gepusht', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-durable-func', 'feat/x', 17);
+  const vorher = gh.kopf();
+  const cwd = besitzerKlon(gh, 'olaf-durable-func', 'feat/x');
+  await einreihen('own1', 'olaf-durable-func', 17);
+  const { d, calls } = deps(gh, { besitzerCwd: cwd, besitzerArbeit: (p) => besitzerCommit(cwd, /Paket: `([^`]+)`/.exec(p)![1]) });
+  assert.deepEqual(await F.fixTick(d), { started: 1, done: 0 });
+  let f: any = await T.fixesCol().findOne({ _id: 'fix:own1' as any });
+  assert.equal(f.wieder, true); assert.equal(calls.started, 0, 'kein neuer Strang');
+  assert.equal(f.worktree, cwd, 'Fix-Worktree = cwd des Besitzers');
+  assert.match(calls.gesendet[0], new RegExp(`Worktree: \`${cwd}\``));
+  assert.equal(readFileSync(join(process.env.WERKBANK_REVIEW_DIR!, f.paket, 'auftrag.md'), 'utf8').trim(), calls.gesendet[0]);
+  assert.deepEqual(await F.fixTick(d), { started: 0, done: 1 });
+  f = await T.fixesCol().findOne({ _id: 'fix:own1' as any });
+  assert.equal(f.status, 'fertig', String(f.note) + calls.status.at(-1)?.body); assert.equal(calls.push, 1); assert.notEqual(gh.kopf(), vorher); assert.equal(f.neu, gh.kopf());
+});
+
+test('Besitzer-Strang auf anderem Zweig: nicht wiederverwendet, frischer Klon mit neuem Strang', async () => {
+  await setze();
+  const gh = fakeGithub('olaf-calc-api', 'feat/x', 18);
+  const cwd = besitzerKlon(gh, 'olaf-calc-api', 'develop');
+  await einreihen('own2', 'olaf-calc-api', 18);
+  const { d, calls } = deps(gh, { besitzerCwd: cwd });
+  assert.deepEqual(await F.fixTick(d), { started: 1, done: 0 });
+  const f: any = await T.fixesCol().findOne({ _id: 'fix:own2' as any });
+  assert.equal(f.wieder, false); assert.equal(calls.started, 1); assert.equal(calls.gesendet.length, 0);
+  assert.notEqual(f.worktree, cwd); assert.match(f.worktree, /fix-WirStrom1__olaf-calc-api-18-/);
+  await F.fixTick(d);
+  assert.equal(calls.push, 1);
 });
