@@ -342,7 +342,10 @@ export async function freigabeSetzen(id: string, neu: string, von: string | null
   if (String(f.neu ?? '') !== neu) return { ok: false, grund: 'SHA passt nicht zum geprüften Stand.' };
   if (f.freigabe) return { ok: true };   // idempotent: schon freigegeben, derselbe Stand
   // Paket G: Schutzpfade — ohne grünes Opus-Urteil für diesen Kopf und ausdrückliches Go keine Marke.
-  const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: f.frage?.dateien ?? [], schutzGo: opts.schutzGo });
+  // Leere/fehlende Liste nie glauben (git-Fehler bei der Frage hinterlässt []): aus git neu berechnen, sonst sperren.
+  let dateien: string[] | null = Array.isArray(f.frage?.dateien) && f.frage.dateien.length ? f.frage.dateien : await fixDateien(f, neu, realGit);
+  if (dateien === null) return { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff des Fix nicht ermittelbar) — nichts freigegeben.' };
+  const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien, schutzGo: opts.schutzGo });
   if (!sg.ok) return { ok: false, grund: sg.grund };
   const c = await fixesCol().updateOne({ _id: f._id, status: 'freigabe_frage', freigabe: { $exists: false } },
     { $set: { freigabe: { at: now, neu, zweig: f.zweig, pr: f.number, von, ...(sg.treffer.length ? { schutzGo: true, schutz: sg.treffer } : {}) }, at: now } });
@@ -599,7 +602,8 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
     return ablehnen(f, p.gruende, { fix, neu, commits, tests, gate }, deps, now);
   }
   // Paket G: Schutzpfade — kein Push ohne Opus-Urteil + Go; der Auto-Weg fällt in die Freigabe-Frage.
-  { const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: await fixDateien(f, neu, g), schutzGo: f.freigabe?.schutzGo === true });
+  { const dat = await fixDateien(f, neu, g);
+    const sg = dat === null ? { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff des Fix nicht ermittelbar) — nichts gepusht.' } : await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: dat, schutzGo: f.freigabe?.schutzGo === true });
     if (!sg.ok) return frageStellen(f, { ok: false, gruende: [sg.grund!] }, { fix, neu, commits, tests, gate }, dir, g, deps, now); }
   try { await deps.push!(f.repo, klon, neu, f.zweig); }
   catch (e: any) {
@@ -659,9 +663,10 @@ async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix:
  * „@fix freigeben“ setzt die Marke, die den Takt fortsetzt. Die Hauptchat-Meldung nennt Paketpfad und Frage.
  */
 /** Dateien, die der Fix gegenüber dem PR-Kopf ändert (für die Schutzpfad-Prüfung). */
-async function fixDateien(f: any, neu: string, g: GitRun): Promise<string[]> {
+/** `null` = nicht ermittelbar (git-Fehler): Aufrufer müssen dann SCHLIESSEN (fail closed), nie „keine Schutzdateien“ annehmen. */
+export async function fixDateien(f: any, neu: string, g: GitRun): Promise<string[] | null> {
   if (neu === f.head) return [];
-  try { return String(await g(['diff', '--name-only', f.head, neu], f.worktree)).split('\n').filter(Boolean); } catch { return []; }
+  try { return String(await g(['-c', 'core.quotepath=false', 'diff', '--name-only', f.head, neu], f.worktree)).split('\n').filter(Boolean); } catch { return null; }
 }
 
 async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, g: GitRun, deps: FixDeps, now: Date) {
@@ -676,7 +681,7 @@ async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { 
     if (x.neu !== f.head) writeFileSync(join(dir, 'fix-diff.patch'), kappen(String(await g(['diff', f.head, x.neu], f.worktree))));
   } catch (e: any) { paketFehler = scrub(e?.message ?? e); deps.log?.('pr-fix freigabe paket', { pr: `${f.repo}#${f.number}`, error: paketFehler }); }
   const note = `Freigabe-Frage: ${p.ok ? 'Tests, Gate und Push-Bedingungen grün' : `nicht freigabefähig (${p.gruende.join('; ')})`}${paketFehler ? ` — Paket unvollständig (Schreibfehler: ${paketFehler})` : ''} — Paket ${f.paket}`;
-  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', doneAt: null, neu: x.neu, frage: { at: now, neu: x.neu, dateien: await fixDateien(f, x.neu, g), zweig: f.zweig, pr: f.number, urteil: p.ok, gruende: p.ok ? [] : p.gruende, gate: x.gate ? { exit: x.gate.exit, hart: x.gate.hart } : null, tests: testsGruen(x.tests) }, note } });
+  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', doneAt: null, neu: x.neu, frage: { at: now, neu: x.neu, dateien: (await fixDateien(f, x.neu, g)) ?? [], zweig: f.zweig, pr: f.number, urteil: p.ok, gruende: p.ok ? [] : p.gruende, gate: x.gate ? { exit: x.gate.exit, hart: x.gate.hart } : null, tests: testsGruen(x.tests) }, note } });
   await audit(f, { ergebnis: 'frage', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
   deps.log?.('pr-fix freigabe-frage', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', modus: fixAuto(f) && !f.freigabe ? 'auto' : 'frage', paket: f.paket });
   // R30a: Im Auto-Modus heißt die Frage „gefallen, deswegen gefragt“ — die Gründe stehen drin, Knut kann trotzdem freigeben.
@@ -750,7 +755,8 @@ async function pruefeNachStrang(f: any, deps: FixDeps, g: GitRun, now: Date, neu
 async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, g: GitRun, x: { fix: FixJson | null; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any; lage: PushLage; dir: string; klon: string }) {
   const zuGithub = (t: string) => (GEHEIM.test(t) ? null : t);
   // Paket G: letzte Schranke vor dem Push auch im Freigabe-Lauf (Go muss in der Marke stehen, Urteil für genau diesen Kopf).
-  { const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: await fixDateien(f, neu, g), schutzGo: f.freigabe?.schutzGo === true });
+  { const dat = await fixDateien(f, neu, g);
+    const sg = dat === null ? { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff des Fix nicht ermittelbar) — nichts gepusht.' } : await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: dat, schutzGo: f.freigabe?.schutzGo === true });
     if (!sg.ok) {
       await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', note: sg.grund, at: now }, $unset: { freigabe: '' } });
       await melde(f, `Nicht gepusht: ${sg.grund}`, deps);

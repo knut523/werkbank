@@ -208,3 +208,14 @@ test('Plan 157 B (Review): doppelte Kennung nur im ersten Block; Einrückung der
   const lang = '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n';
   assert.equal(trageEin(lang, [{ id: 'D2', text: 'ok' }], '14.10.'), '**D2 — B**\n  - Empfehlung: a, weil\n    das einfacher ist\n    - Knut: ok (14.10.)\n');
 });
+
+test('Schutzpfade: repoFakten liefert Nicht-ASCII-Namen unquotiert (auth/ü.ts trifft die Globs)', async () => {
+  const { wt } = setup();
+  mkdirSync(join(wt, 'auth'), { recursive: true }); mkdirSync(join(wt, '.github/workflows'), { recursive: true });
+  writeFileSync(join(wt, 'auth/ü.ts'), 'x\n'); writeFileSync(join(wt, '.github/workflows/ü.yml'), 'x\n');
+  sh(wt, 'add', '.'); sh(wt, 'commit', '-q', '-m', 'umlaut');
+  const f = F.repoFakten(wt);
+  assert.ok(f.dateien.includes('auth/ü.ts') && f.dateien.includes('.github/workflows/ü.yml'), JSON.stringify(f.dateien));
+  const { schutzTreffer } = await import('../server/schutzpfade.ts');
+  assert.equal(schutzTreffer(f.dateien).length, 2);
+});

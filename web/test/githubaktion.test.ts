@@ -212,3 +212,10 @@ test('R30 Punkt 4: Basis-Fallback origin/HEAD, wenn der PR keine Basis liefert',
   await fuehreAus({ art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: KLON, base: 'dev' }, on, wege(c2, ORIGIN, { standard: null }));
   assert.ok(c2.includes('gate feat/a dev'), 'letzter Fallback dev');
 });
+
+test('Sicherheit: schutzGo aus der Agent-Eingabe wird verworfen (push und fix_freigeben)', () => {
+  const p: any = pruefeAktion({ art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: KLON, schutzGo: true }, ENV);
+  assert.ok(!('fehler' in p)); assert.equal(p.schutzGo, undefined);
+  const q: any = pruefeAktion({ art: 'fix_freigeben', repo: 'WirStrom1/x', fix: 'fix:1', neu: 'a'.repeat(40), schutzGo: 'true' }, ENV);
+  assert.ok(!('fehler' in q)); assert.equal(q.schutzGo, undefined);
+});
