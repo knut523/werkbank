@@ -22,6 +22,8 @@ import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, s
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
+import { starte, beenden } from './prozesse.ts';
+import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { testAccount } from './accounts.ts';
@@ -163,6 +165,12 @@ const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DA
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
+/** Plan Prozessregister R6: die Claude-CLI startet über `starte` (eigene Gruppe, Registereintrag, Besitzer = Strang), nicht im SDK-eigenen Spawn. */
+export const cliStarter = (besitzer: string) => (o: SpawnOptions) => {
+  const { id, kind } = starte(o.command, o.args, { besitzer, art: 'claude-cli', cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  if (o.signal) { if (o.signal.aborted) void beenden(id); else o.signal.addEventListener('abort', () => void beenden(id), { once: true }); }
+  return kind;
+};
 const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? turnLimitRolle(orchMap[live.key]?.rolle ?? 'leser') : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
@@ -1881,6 +1889,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   mark(live, 'kontext');
   const guard = makeGuard(live);
   const options: Record<string, any> = {
+    spawnClaudeCodeProcess: cliStarter(key),
     cwd: scratch,
     additionalDirectories: [VAULT_DIR],
     settingSources: ['user', 'project'],
@@ -2027,6 +2036,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? 'aborted' });
     if (live.req) abortWorkersOf(key);
     end(live);
+    void beenden(key);   // R6: die CLI-Gruppe (TERM, nach Frist KILL) — nicht mehr „der Strom darf liegen bleiben“
   };
   const nachlaufTakt = setInterval(() => {
     if (!imNachlauf(live) || Date.now() - (live.inbox?.closedAt ?? Date.now()) < nachlaufMs()) return;
@@ -2667,6 +2677,7 @@ async function claudeVerifizierer(live: Live, req: TurnRequest, prompt: string, 
   let text = '', usage: MeliousUsage | undefined, fehler = '';
   try {
     const options: Record<string, any> = {
+      spawnClaudeCodeProcess: cliStarter(`${live.key}#endpruefung`),
       cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: turnLimitRolle('endpruefung'), permissionMode: 'default', abortController: abort, env, mcpServers: {},
       allowedTools: ['Read', 'Grep', 'Glob'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'Task', 'Agent', 'WebFetch', 'WebSearch', 'AskUserQuestion'],
       canUseTool: nurLesen,
