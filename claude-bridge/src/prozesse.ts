@@ -2,7 +2,7 @@
 // Jeder Kindprozess startet über `starte`: eigene Prozessgruppe, Eintrag im Register (Besitzer, PID + Startzeit, Frist, letzte Aktivität),
 // Austrag beim Ende. Beenden, Wächter und Anzeige lesen nur aus diesem Register. Fremde PIDs werden nie signalisiert.
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process';
-import { readFileSync, renameSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export interface Eintrag {
@@ -36,13 +36,14 @@ let zaehler = 0;
 
 /** Register zusätzlich atomar (tmp + rename) in diese Datei spiegeln; null = nur Speicher. */
 export function registerDatei(pfad: string | null) { datei = pfad; if (pfad) schreibe(); }
-function schreibe() {
-  if (!datei) return;
+function schreibe() { if (datei) schreibeNach(datei); }
+/** Atomar (tmp + rename): immer nur die Einträge DIESES Laufs. */
+function schreibeNach(ziel: string) {
   try {
-    mkdirSync(dirname(datei), { recursive: true });
-    const tmp = `${datei}.${process.pid}.tmp`;
+    mkdirSync(dirname(ziel), { recursive: true });
+    const tmp = `${ziel}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify([...reg.values()], null, 1));
-    renameSync(tmp, datei);
+    renameSync(tmp, ziel);
   } catch { /* Spiegel darf den Start nicht stören */ }
 }
 /** Einträge eines früheren Laufs (R2 räumt auf; hier wird nichts beendet). */
@@ -52,6 +53,43 @@ export function vorlaufLesen(pfad: string): Eintrag[] {
 
 /** Kurzform ohne Geheimnisse: nur Befehl und gekürzte Argumente, nie die Umgebung. */
 const kurz = (cmd: string, args: string[]) => [cmd, ...args].join(' ').replace(/\s+/g, ' ').slice(0, 120);
+
+/** PGID + Startzeit aus /proc/<pid>/stat (Feld 5 = pgrp; Feld 22 = Startzeit, siehe procStart). */
+function pgidOf(pid: number): number | null {
+  try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); const rest = s.slice(s.lastIndexOf(')') + 2).split(' '); return Number(rest[3]); } catch { return null; }
+}
+function startzeitOf(pid: number): string | null {
+  try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19] ?? null; } catch { return null; }
+}
+const lebendePids = () => readdirSync('/proc').filter((d) => /^\d+$/.test(d)).map(Number);
+
+/** Start-Aufräumen (R2): beendet alle noch lebenden Prozesse aus dem Register des Vorlaufs. Fremde (Startzeit passt
+ *  nicht, anderer pgid) werden nie angefasst. Rückgabe: Anzahl geräumter Einträge. Liest die Datei synchron vor dem ersten await. */
+export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<number> {
+  const eintraege = vorlaufLesen(pfad);
+  if (!eintraege.length) return 0;
+  // Datei synchron übernehmen, vor dem ersten await: danach stehen dort nur die Einträge dieses Laufs —
+  // unabhängig davon, ob registerDatei() vorher oder nachher kommt, und ohne spätes Überschreiben.
+  schreibeNach(pfad);
+  let geräumt = 0;
+  for (const e of eintraege) {
+    // Leader lebt mit passender Startzeit → eigene Gruppe ordentlich TERM → KILL.
+    if (lebt(e)) { if (await beendenProz(e, frist)) geräumt++; continue; }
+    // Leader weg (Absturz, kein exit-Handler) → Gruppe kann noch leben: alle /proc-Prozesse mit pgid == e.pid
+    // und Startzeit >= e.start suchen und per SIGKILL beenden. Ohne e.start nichts tun (könnte fremd sein).
+    if (!e.start || !e.pid) continue;
+    const alt = Number(e.start);
+    for (const pid of lebendePids()) {
+      const pgid = pgidOf(pid);
+      if (pgid !== e.pid) continue;                     // fremde Gruppe, nie anfassen
+      const z = startzeitOf(pid);
+      if (!z || Number(z) < alt) continue;   // zu alt oder unlesbar → fremd, nie anfassen
+      try { process.kill(pid, 'SIGKILL'); } catch { /* weg */ }
+    }
+    geräumt++;
+  }
+  return geräumt;
+}
 
 export function starte(cmd: string, args: string[], o: StarteOpt): { id: string; kind: ChildProcess } {
   const jetzt = o.jetzt ?? Date.now;
