@@ -155,6 +155,7 @@ test('Persistenz: Neustart-Simulation — Eimer nicht voll, lädt ab gespeichert
   k.budgetPersistenz(f);
   k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
   assert.equal(leerBuchen(TAG), 3, 'neue Datei = pessimistischer Start: 15 000 / 4 500');
+  for (let i = 0; i < 3; i++) { k.budgetAbrechnen(U, 'x' + i, 1_500, TAG, {}); k.budgetAbrechnen(U, 'd' + i, 3_000, TAG, {}); }   // abgerechnet + direkt belastet: eimer wie vorher leer, nichts offen (offene Buchungen überleben den Neustart und liefen nach 30 min zurück)
   for (const [i, e] of [280, 290, 300].entries()) { k.budgetBuche(U, 'l' + i, 'pruefung', TAG, {}); k.budgetAbrechnen(U, 'l' + i, e, TAG, {}); }
   const bis = k.budgetFehler(U, TAG, {});
   assert.ok(existsSync(f));
@@ -169,6 +170,35 @@ test('Persistenz: Neustart-Simulation — Eimer nicht voll, lädt ab gespeichert
   assert.ok(bis > TAG);
   k.budgetPersistenz(f);
   assert.match(k.budgetGrund(U, 'bauer', TAG + 60_000, {}), /Breaker|Energie-Budget/);
+});
+
+test('Persistenz: offene Buchung überlebt den Neustart — Freigeben erstattet', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
+  k.budgetPersistenz(f);
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, {}).ok);      // 15 000 − 4 500 = 10 500
+  k.budgetPersistenz(f);                                        // Neustart
+  k.budgetFreigeben(U, 's1', TAG, {});
+  assert.equal(leerBuchen(TAG, 'z'), 3, 'erstattet: wieder 15 000 / 4 500');
+});
+
+test('Persistenz: offene Buchung nach Neustart und BUCHUNG_LEBEN_MS → Ablaufpfad erstattet', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
+  k.budgetPersistenz(f);
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, {}).ok);
+  k.budgetPersistenz(f);
+  assert.equal(leerBuchen(TAG + 31 * 60_000, 'z'), 4, '10 500 + 4 133 Nachladung + 4 500 erstattet → 4 Bauer-Jobs, sonst 3');
+});
+
+test('Persistenz: Datei ohne offen lädt (abwärtskompatibel)', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
+  k.budgetPersistenz(f);
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  const j = JSON.parse(readFileSync(f, 'utf8')); delete j.zustaende[U].offen; writeFileSync(f, JSON.stringify(j));
+  k.budgetPersistenz(f);
+  assert.doesNotThrow(() => k.budgetFreigeben(U, 'nix', TAG, {}));
+  assert.equal(k.budgetBuche(U, 'a', 'pruefung', TAG, {}).ok, true);
 });
 
 test('Persistenz: fehlende oder kaputte Datei → pessimistischer Start (halber Burst)', () => {
