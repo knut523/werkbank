@@ -49,3 +49,28 @@ test('B3-Fix: Kontext fehlt → kein Schlüssel (kein Dedupe); Deep-Modus änder
   assert.ok(normal);
   assert.notEqual(normal, reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: k, deep: true }));
 });
+
+import { dedupeAbfrage, KONTEXT_GRENZEN } from '../server/reviewmotor.ts';
+
+test('Dedupe-Fix: bearbeiteter Kommentar bei gleicher Zahl ändert den Schlüssel', () => {
+  const mk = (body: string) => ({ comments: [{ author: 'a', body, at: 't' }], reviews: [], threads: [] });
+  const a = reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: mk('alt') });
+  const b = reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: mk('neu') });
+  assert.ok(a && b); assert.notEqual(a, b);
+  assert.equal(a, reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: mk('alt') }));
+});
+
+test('Dedupe-Fix: abgeschnittene Liste (Grenze erreicht) → kein Schlüssel', () => {
+  const c = (n: number) => Array.from({ length: n }, (_, i) => ({ author: 'a', body: `c${i}`, at: 't' }));
+  assert.equal(reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: { comments: c(KONTEXT_GRENZEN.comments), reviews: [], threads: [] } }), null);
+  assert.equal(reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: { comments: [], reviews: [], threads: [{ comments: c(KONTEXT_GRENZEN.threadComments) }] } }), null);
+  assert.ok(reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: { comments: c(KONTEXT_GRENZEN.comments - 1), reviews: [], threads: [] } }));
+});
+
+test('Dedupe-Fix: nur vollständige Reviews wiederverwendbar; Hand-Anfrage nie dedupliziert', () => {
+  const r = { _id: 'x', repo: 'o/r', number: 1, head: 'h', trigger: 'tag' };
+  const f: any = dedupeAbfrage(r, 'k');
+  assert.equal(f['entwurf.vollstaendig'], true, 'unvollständiger Entwurf (false/null) wird nicht gefunden');
+  assert.equal(dedupeAbfrage({ ...r, trigger: 'hand' }, 'k'), null);
+  assert.equal(dedupeAbfrage(r, null), null);
+});
