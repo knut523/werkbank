@@ -8,6 +8,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, realpathSync, statSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { strangSandbox } from './sandbox.ts';
+import { vorlaufAufraeumen, registerDatei } from './prozesse.ts';
 import { schreibzielProblem, geheimHinterLink, GEHEIM } from './jcode-pre-tool.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
@@ -278,6 +279,11 @@ interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boo
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string }; vorgeprueft?: boolean;
   parent?: string; rolle?: Rolle; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean; delegation?: string }
 const orchFile = join(cfg.stateDir, 'orch.json');
+// Prozessregister (Plan Prozessregister): spiegeln nach <stateDir>/prozesse.json; VORHER die Waisen des Vorlaufs
+// räumen (R2) — nach Absturz/SIGKILL überlebende Gruppen werden beendet, Fremde nie angefasst.
+const prozessDatei = join(cfg.stateDir, 'prozesse.json');
+vorlaufAufraeumen(prozessDatei).catch(() => { /* Start darf am Vorlauf nicht scheitern */ });
+registerDatei(prozessDatei);
 let orchMap: Record<string, OrchEntry> = {};
 try { orchMap = JSON.parse(readFileSync(orchFile, 'utf8')); } catch { /* keine */ }
 // Worker überleben keinen Neustart (sie leben höchstens so lange wie der Lead-Zug, Plan 165): alte Einträge weg.
