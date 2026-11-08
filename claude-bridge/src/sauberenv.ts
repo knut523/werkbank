@@ -1,12 +1,16 @@
 // Saubere Umgebung für alles, was vom Modell oder aus dem Repository stammenden Code ausführt (Prüfläufe, Tests).
 // Eigenes Modul, damit bauerrennen/bauerstrang es ohne Importzyklus nutzen können (sessions.ts importiert bauerstrang.ts).
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 // Was nie in die Umgebung einer Sitzung oder eines Prüfbefehls der Brücke gelangt (Variablennamen).
-export const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DATABASE_URL/i;
+// Eine Quelle: scripts/secret-env.pattern und scripts/drop-env.names — dieselben Dateien liest scripts/sauber-env.sh (Gate).
+const SKRIPTE = new URL('../../scripts/', import.meta.url);
+const zeilen = (datei: string) => readFileSync(new URL(datei, SKRIPTE), 'utf8').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+export const SECRET_ENV = new RegExp(zeilen('secret-env.pattern')[0]!.trim(), 'i');
+export const DROP_ENV: string[] = zeilen('drop-env.names').join(' ').split(/\s+/).filter(Boolean);
 
 const stateDir = () => process.env.BRIDGE_STATE_DIR || join(process.cwd(), '..', '.runtime', 'bridge');
 
@@ -45,7 +49,7 @@ export function orchGitEnv(env: Record<string, string | undefined>, dir: string 
 export function checkEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const k of Object.keys(env)) if (SECRET_ENV.test(k)) delete env[k];
-  for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION', 'NODE_OPTIONS', 'CLAUDE_CONFIG_DIR', 'SSH_AUTH_SOCK']) delete env[k];
+  for (const k of DROP_ENV) delete env[k];
   orchGitEnv(env);
   const home = mkdtempSync(join(tmpdir(), 'werkbank-pruef-'));
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'), npm_config_cache: join(home, '.npm'), CI: '1' });

@@ -160,7 +160,7 @@ case "${1:-}" in
     # Zeitdeckel je Test (WERKBANK_TEST_TIMEOUT_MS, Vorgabe 120000; 0 = aus): ein hängender Test endet mit Fehler statt die Suite 13 h zu blockieren.
     TT=""; [ "${WERKBANK_TEST_TIMEOUT_MS:-120000}" -gt 0 ] 2>/dev/null && TT="--test-timeout=${WERKBANK_TEST_TIMEOUT_MS:-120000}"
     # sauber-env.sh: ohne WERKBANK_*/BRIDGE_*/LEITSTAND_*/GIT_CONFIG_GLOBAL der aufrufenden Sitzung (sonst z. B. Fix-Tests rot)
-    (cd "$WB/claude-bridge" && "$HERE/sauber-env.sh" node --test $TT test/*.test.ts 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
+    (cd "$WB/claude-bridge" && "$HERE/sauber-env.sh" node --test $TT test/*.test.ts 2>&1 | grep -E '^# (pass|fail)') && (cd "$WB/web" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" SAUBER_ENV_KEEP=MONGO_URI_WERKBANK \
       WERKBANK_TEST_PORT=${WERKBANK_TEST_PORT:-3571} WERKBANK_TEST_BRIDGE_PORT=${WERKBANK_TEST_BRIDGE_PORT:-3596} "$HERE/sauber-env.sh" node --test $TT test/*.test.ts 2>&1 | grep -E '^# (pass|fail|skipped)'); rc=$?
     kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; exit $rc ;;
   e2e) (cd "$WB/web" && node e2e/smoke.mjs) ;;

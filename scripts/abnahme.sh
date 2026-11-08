@@ -75,7 +75,7 @@ else
   fi
   for t in $(printf '%s\n' "${!TESTS[@]}" | sort); do
     pkg=${t%%/*}; rel=${t#*/}; s=$(date +%s)
-    out=$(cd "$ROOT/$pkg" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" \
+    out=$(cd "$ROOT/$pkg" && MONGO_URI_WERKBANK="mongodb://127.0.0.1:$TP" SAUBER_ENV_KEEP=MONGO_URI_WERKBANK \
       env $PORTENV timeout "$TMO" "$HERE/sauber-env.sh" node --test --test-timeout=120000 "$rel" 2>&1); rc=$?; d=$(( $(date +%s)-s ))
     p=$(echo "$out" | sed -n 's/^# pass //p' | tail -1); fl=$(echo "$out" | sed -n 's/^# fail //p' | tail -1); c=$(echo "$out" | sed -n 's/^# cancelled //p' | tail -1)
     if [ $rc -eq 124 ]; then rot "$t: hangs (> ${TMO}s, killed)"

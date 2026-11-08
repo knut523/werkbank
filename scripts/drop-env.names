@@ -1,0 +1,3 @@
+# Zusätzlich entfernte Variablen (genaue Namen, durch Leerzeichen getrennt), die kein Geheimnis-Muster treffen,
+# aber Zugang geben oder das Verhalten der Prüfläufe verbiegen. Gelesen von sauberenv.ts (checkEnv) und sauber-env.sh.
+ANTHROPIC_BASE_URL BW_SESSION NODE_OPTIONS CLAUDE_CONFIG_DIR SSH_AUTH_SOCK
