@@ -10,6 +10,7 @@ import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readd
 import { homedir, hostname, userInfo } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { procStart, lebt, beendenProz } from '../../claude-bridge/src/prozesse.ts';
 import net from 'node:net';
 import http from 'node:http';
 
@@ -155,21 +156,9 @@ export function schwaerzen(text: string, geheim: string[]): string {
   return t.replace(/((?:secret|password|passwd|token|api[_-]?key|pepper|cookie)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi, '$1***');
 }
 
-/** Ist ein Prozess noch derselbe, den wir gestartet haben? PID + Startzeit (Feld 22 in /proc/<pid>/stat) — nie nach Namen. */
-export function procStart(pid: number): string | null {
-  try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19] ?? null; } catch { return null; }
-}
-export const lebt = (p: Proz) => p.pid > 1 && !!p.start && procStart(p.pid) === p.start;
-
-/** Eigenen Prozess (und seine Gruppe — gestartet mit eigener Sitzung) beenden: TERM, nach Frist KILL. Fremde PIDs nie. */
-export async function beenden(p: Proz, frist = 6000): Promise<boolean> {
-  if (!lebt(p)) return false;
-  const sig = (s: NodeJS.Signals) => { try { process.kill(-p.pid, s); } catch { try { process.kill(p.pid, s); } catch { /* weg */ } } };
-  sig('SIGTERM');
-  for (let t = 0; t < frist && lebt(p); t += 200) await new Promise((r) => setTimeout(r, 200));
-  if (lebt(p)) sig('SIGKILL');
-  return true;
-}
+// procStart/lebt/beenden liegen im Prozessregister (claude-bridge/src/prozesse.ts); hier nur weitergereicht.
+export { procStart, lebt };
+export const beenden = beendenProz;
 
 // ---------- Werkzeuge mit Wirkung ----------
 
