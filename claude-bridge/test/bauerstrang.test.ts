@@ -53,3 +53,17 @@ test('Schutzzone im Auftrag → kein Rennen, Opus (ok:false); roter voller Lauf 
   assert.match(r!.modell!, new RegExp(FLASH), 'DeepSeek fiel am vollen Lauf durch');
   rmSync(wurzel, { recursive: true, force: true });
 });
+
+test('Sonnet-Klasse im Strang: Sonnetzone → ok:false mit Sonnet-Grund, kein Bauer gebaut; meliousLeer (userId) ebenso; Abschaltung', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const z = await bestofnStrang({ cwd, id: 'x5', prompt: 'ändere src/kapazitaet.ts', env: {}, zug: zug({}), pruefe });
+  assert.equal(z?.ok, false); assert.equal(z!.text, '');
+  assert.match(z!.grund, /Sonnet-Klasse/); assert.match(z!.grund, /Melious leer/);
+  assert.equal(gebaut.length, 0, 'kein Best-of-N-Rennen');
+  // Melious leer (userId gesetzt, budgetGrund wirft Grund über BRIDGE_MELIOUS_BUDGET-Testmodus: env leer → budgetAn true) — hier: Env-Schalter statt Konto, userId-Pfad mit leerem Env
+  const m = await bestofnStrang({ cwd, id: 'x6', prompt: 'ändere src/kontofuehrung.ts', env: {}, zug: zug({}), pruefe, userId: 'knut' });
+  assert.equal(m?.ok, false); assert.match(m!.grund, /Sonnet-Klasse/);
+  const a = await bestofnStrang({ cwd, id: 'x7', prompt: 'ändere src/kapazitaet.ts', env: { BRIDGE_SONNETKLASSE: 'aus' }, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe });
+  assert.equal(a?.ok, true, 'Abschaltung → alter Pfad');
+  rmSync(wurzel, { recursive: true, force: true });
+});

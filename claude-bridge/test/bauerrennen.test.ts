@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bauerFuer, inSchutzzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, OPUS, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
+import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
 const gruen: Schnell = { tsc: true, lint: true, tests: true };
@@ -22,6 +22,19 @@ test('Schutzzonen-Routing: Migrationen/Auth/Billing/Workflows/.env → Opus alle
   assert.deepEqual(bauerFuer(['src/auth.ts'], {}), [FLASH, DEEPSEEK], 'auth.ts ist keine auth-Ordner');
   assert.deepEqual(bauerFuer(['src/geheim/x.ts'], { BRIDGE_SCHUTZZONEN: 'src/geheim/**' }), [OPUS], 'konfigurierbar');
   assert.deepEqual(bauerFuer(['src/a.ts'], { BRIDGE_BESTOFN: 'aus' }), [FLASH]);
+});
+
+test('Sonnet-Klasse: kapazitaet.ts → sonnet, Schutzzone schlägt Sonnetzone, meliousLeer, BRIDGE_SONNETZONEN überschreibt', () => {
+  assert.deepEqual(bauerFuer(['src/kapazitaet.ts'], {}), [SONNET], 'Kapazität ist Geld → Sonnet');
+  assert.deepEqual(bauerFuer(['src/kontofuehrung.ts'], {}), [SONNET], '*konto* Glob');
+  assert.deepEqual(bauerFuer(['src/a.ts'], {}, undefined, true), [SONNET], 'Melious leer → Sonnet');
+  assert.deepEqual(bauerFuer(['src/a.ts'], {}, undefined, false), [FLASH, DEEPSEEK], 'ohne Sonnet-Grund wie bisher');
+  assert.deepEqual(bauerFuer(['src/kapazitaet.ts'], { BRIDGE_SONNETKLASSE: 'aus' }), [FLASH, DEEPSEEK], 'Env-Abschaltung');
+  // Schutzzone bleibt vorrangig: auth/kapazitaet.ts → Opus
+  assert.deepEqual(bauerFuer(['src/auth/kapazitaet.ts'], {}), [OPUS]);
+  assert.ok(inSonnetzone(['web/accounts.ts'], {}));
+  assert.deepEqual(bauerFuer(['src/eigen/x.ts'], { BRIDGE_SONNETZONEN: 'src/eigen/**' }), [SONNET], 'überschreibbar');
+  assert.deepEqual(bauerFuer(['src/kapazitaet.ts'], { BRIDGE_SONNETZONEN: 'src/eigen/**' }), [FLASH, DEEPSEEK], 'Überschreibung ersetzt die Vorgabe');
 });
 
 test('Tamper-Guard: entfernte Assertion, geänderte Zeile, Skip-Marker, gelöschte Testdatei; neue Tests sind erlaubt', () => {

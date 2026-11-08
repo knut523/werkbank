@@ -2677,7 +2677,7 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
       if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
       // Best-of-N (bauerrennen.ts, BRIDGE_BESTOFN=aus schaltet ab): erster Zug = zwei Bauer, danach Verlierer-Retry/Eskalation statt Fix.
       let modellNutzen = modell;
-      if (runde === 1) { const b = await bestofnStrang({ cwd, id: live.key.slice(-12), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe }); if (b) return b; }
+      if (runde === 1) { const b = await bestofnStrang({ cwd, id: live.key.slice(-12), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
       else { const f = await bestofnAblehnung(live.key.slice(-12), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; if (f?.art === 'eskalation') { modellNutzen = f.modell; p += `\n\n## Fehlerlogs der bisherigen Runden\n${f.fehlerlogs.join('\n---\n').slice(-6000)}`; } }
       emitStatus(live, `⏳ opencode 2 (Melious ${modellNutzen}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
       const t0 = Date.now();

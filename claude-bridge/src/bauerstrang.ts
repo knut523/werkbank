@@ -4,13 +4,16 @@
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { bestofnAn, inSchutzzone, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, pruefSemaphor, shellPruefung, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, pruefSemaphor, shellPruefung, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { budgetGrund } from './kapazitaet.ts';
 import { subWorktree, removeWorktree, run } from './delegation.ts';
 import { GLM } from './modellwahl.ts';
 
 type Env = Record<string, string | undefined>;
 export interface StrangRennen {
   cwd: string; id: string; prompt: string; statistikPfad?: string | null; env?: Env;
+  /** Nutzer-Konto: gesetzt → Melious-Budget entscheidet über die Sonnet-Klasse (Melious leer → Sonnet baut). */
+  userId?: string;
   /** Ein Bauer-Zug in einem Unter-Worktree (OC2 über denselben Pool wie der normale Strang-Zug). */
   zug(dir: string, modell: string, prompt: string): Promise<{ ok: boolean; text: string; grund: string }>;
   /** Prüfbefehle des Repos (tsc/lint = schnell, alles = voll) im Worktree; die Semaphor-Klammer setzt dieses Modul. */
@@ -49,6 +52,9 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   if (abgeschaltet(stat, env)) return null;
   const dateien = pfade(o.prompt);
   if (inSchutzzone(dateien, env)) return { ok: false, text: '', grund: 'Schutzzone (Migration/Auth/Billing/Workflow/.env) — Opus baut, kein Best-of-N' };
+  // Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten oder Melious leer → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus.
+  const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
+  if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return { ok: false, text: '', grund: 'Sonnet-Klasse (Geld/Konten) oder Melious leer — Sonnet baut, kein Best-of-N' };
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
   const deps: Deps = {
     async bauen(bauer, a, op) {

@@ -18,9 +18,18 @@ export const schutzzonen = (env: Env = process.env) => { const l = (env.BRIDGE_S
 const globRe = (g: string) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0001').replace(/\*\*/g, '\u0002').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0001/g, '(?:.*/)?').replace(/\u0002/g, '.*') + '$');
 export const inSchutzzone = (dateien: string[], env: Env = process.env) => { const re = schutzzonen(env).map(globRe); return dateien.some((d) => re.some((r) => r.test(d.replace(/^\.\//, '')))); };
 
-/** Welche Bauer für diese Änderung: Schutzzone → Opus allein; sonst beide Flash-Bauer (oder nur glm-flash, wenn Best-of-N aus ist). */
-export function bauerFuer(dateien: string[], env: Env = process.env, stat?: Statistik): string[] {
+// ---- Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus -------------
+export const SONNET = 'sonnet';
+export const sonnetKlasseAn = (env: Env = process.env) => String(env.BRIDGE_SONNETKLASSE ?? '').trim().toLowerCase() !== 'aus';
+export const SONNETZONEN = ['**/kapazitaet.ts', '**/accounts.ts', '**/verbrauch.ts', '**/*budget*', '**/*konto*'];
+/** Glob-Liste aus BRIDGE_SONNETZONEN (kommagetrennt), sonst die Vorgabe — genau wie schutzzonen(). */
+export const sonnetzonen = (env: Env = process.env) => { const l = (env.BRIDGE_SONNETZONEN ?? '').split(',').map((x) => x.trim()).filter(Boolean); return l.length ? l : SONNETZONEN; };
+export const inSonnetzone = (dateien: string[], env: Env = process.env) => { const re = sonnetzonen(env).map(globRe); return dateien.some((d) => re.some((r) => r.test(d.replace(/^\.\//, '')))); };
+
+/** Welche Bauer für diese Änderung: Schutzzone → Opus allein; Sonnetzone oder Melious leer → Sonnet allein; sonst beide Flash-Bauer (oder nur glm-flash, wenn Best-of-N aus ist). */
+export function bauerFuer(dateien: string[], env: Env = process.env, stat?: Statistik, meliousLeer = false): string[] {
   if (inSchutzzone(dateien, env)) return [OPUS];
+  if (sonnetKlasseAn(env) && (meliousLeer || inSonnetzone(dateien, env))) return [SONNET];
   return bestofnAn(env) && !(stat && abgeschaltet(stat, env)) ? [FLASH, DEEPSEEK] : [FLASH];
 }
 
