@@ -246,6 +246,16 @@ export function budgetBuche(userId: string, id: string, jobtyp: Jobtyp, now = Da
   return { ok: true, buchung: id, betrag, aus };
 }
 
+/** Zug zu Ende ohne Abrechnung (Claude-Konto, Mock, Abbruch): offene Vorabbuchung zurück in den Topf. Kam Verbrauch, wird er separat direkt belastet. */
+export function budgetFreigeben(userId: string, id: string, now = Date.now(), env: Env = process.env): void {
+  if (!budgetAn(env)) return;
+  const c = budgetCfg(env), z = zust(userId, now, c), b = z.offen.get(id);
+  if (!b) return;
+  z.offen.delete(id);
+  if (b.aus === 'reserve') z.reserve = Math.min(c.reserve, z.reserve + b.betrag); else z.eimer = Math.min(c.burst, z.eimer + b.betrag);
+  speichern();
+}
+
 /** Abrechnung gegen den Ist-Verbrauch: Differenz zur Buchung zurück (oder nachbelastet), Ledger, Stand ↓ (ohne Anker ×1,2). */
 export function budgetAbrechnen(userId: string, id: string, ist: number, now = Date.now(), env: Env = process.env): void {
   if (!budgetAn(env) || !(ist >= 0) || !Number.isFinite(ist)) return;
