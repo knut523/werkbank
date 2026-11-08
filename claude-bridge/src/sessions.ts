@@ -2475,18 +2475,22 @@ export function jcodePromptArg(p: string): string {
 // Gegenprüfung (B10): je Prozess frisch (mkdtemp, 0700) statt eines festen, vorhersagbaren Pfads in /tmp
 let ghLeer: string | null = null;
 const JCODE_GH_LEER = () => (ghLeer ??= mkdtempSync(join(tmpdir(), 'werkbank-jcode-gh-')));
-function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string> }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+// R4 (Testnaht): exportiert, damit prozesse-jcode.test.ts die Gruppe-Beendigung direkt prüfen kann.
+export function jcodeSpawn(o: { cwd: string; prompt: string; model: string | null; tools: string; key: string; timeoutS: number; abbruch?: () => boolean; extra?: Record<string, string>; /** R4 (Gegenprüfung): Auftraggeber (Strang/Conv) für das Register — nie die Startfunktion. */ besitzer?: string }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8', JCODE_PROVIDER_MELIOUS_API_KEY: o.key,
     JCODE_HOOK_PRE_TOOL: JCODE_HOOK, JCODE_HOOK_PRE_TOOL_TIMEOUT_MS: '10000',
     // Pass C (Runde 3): zweite Linie hinter dem Shell-Wächter — gh ohne Konto, git ohne SSH-Schlüssel und ohne Passwortabfrage
     GH_CONFIG_DIR: JCODE_GH_LEER(), GIT_SSH_COMMAND: 'ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes', GIT_TERMINAL_PROMPT: '0', ...o.extra };
   return new Promise((res) => {
-    const c = spawn(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { cwd: o.cwd, env });
+    // R4 (Prozessregister): eigene Gruppe + Register; Timeout/Abbruch → beenden (Gruppe TERM→KILL), damit Enkel mitsterben.
+    const r = starte(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { besitzer: o.besitzer ?? `jcode:${process.pid}:${Date.now().toString(36)}`, art: 'jcode', fristMs: o.timeoutS * 1000, cwd: o.cwd, env });
+    const c = r.kind;
     let so = '', se = '';
     c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
-    const stopper = setInterval(() => { if (o.abbruch?.()) c.kill('SIGTERM'); }, 2000);
+    let zu = false;
+    const timer = setTimeout(() => { zu = true; void beenden(r.id); }, o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (!zu && o.abbruch?.()) { zu = true; clearInterval(stopper); void beenden(r.id); } }, 2000);
     c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
     c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
   });
@@ -2564,7 +2568,7 @@ async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> 
     let out!: { code: number | null; stdout: string; stderr: string }, ausw!: ReturnType<typeof jcodeAuswerten>;
     for (const [i, m] of versuche.entries()) {
       const model = jcodeModell(mel, m);
-      out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
+      out = await jcodeSpawn({ cwd: d.cwd, prompt: d.klick ? prompt + klickHinweis() : prompt, model, tools, key: mel.token, timeoutS: envZahl('BRIDGE_JCODE_TIMEOUT_S', 1200, 60), abbruch: () => !!d.aborted, besitzer: d.workerConv, extra: d.klick ? { WERKBANK_KLICK: '1', WERKBANK_KLICK_AUS: d.klick } : undefined });
       ausw = jcodeAuswerten(out, d.cwd, model);
       const energie = buche(ausw.usage, ausw.gelaufen, out.code === 0 && !!ausw.j, 'jcode');
       log('worker jcode', { delegation: d.id, modell: ausw.gelaufen, exit: out.code, ms: Date.now() - t0, ...ausw.usage, energie: Math.round(energie) });
@@ -2602,15 +2606,18 @@ export const OPENCODE_BIN = () => process.env.BRIDGE_OPENCODE_BIN || join(homedi
  *  Test 05.11.: auf der Box ist opencode installiert und lief sonst still an. Danach übernimmt Claude. */
 export const opencodeAn = () => process.env.BRIDGE_JCODE_OPENCODE === 'on' && existsSync(OPENCODE_BIN());
 export const jcodeReihe = (opencode = opencodeAn()): ('jcode' | 'opencode')[] => (opencode ? ['jcode', 'jcode', 'opencode'] : ['jcode', 'jcode']);
-function opencodeSpawn(o: { cwd: string; prompt: string; timeoutS: number; abbruch: () => boolean }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+export function opencodeSpawn(o: { cwd: string; prompt: string; timeoutS: number; abbruch: () => boolean; /** R4 (Gegenprüfung): Auftraggeber (Strang/Conv) für das Register — nie die Startfunktion. */ besitzer?: string }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   // ponytail: opencode ohne eigenes Profil und ohne Buchung — nur der letzte Rückfall vor Claude; Ausgabe = Antworttext.
   return new Promise((res) => {
-    const c = spawn(OPENCODE_BIN(), ['run', o.prompt], { cwd: o.cwd, env: { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8' } });
+    // R4 (Prozessregister): eigene Gruppe + Register; Timeout/Abbruch → beenden (Gruppe TERM→KILL), damit Enkel mitsterben.
+    const r = starte(OPENCODE_BIN(), ['run', o.prompt], { besitzer: o.besitzer ?? `opencode:${process.pid}:${Date.now().toString(36)}`, art: 'opencode-run', fristMs: o.timeoutS * 1000, cwd: o.cwd, env: { PATH: `${JCODE_SHIM}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: homedir(), LANG: process.env.LANG ?? 'C.UTF-8' } });
+    const c = r.kind;
     let so = '', se = '';
     c.stdout.on('data', (b) => { so = (so + b).slice(-400_000); });
     c.stderr.on('data', (b) => { se = (se + b).slice(-20_000); });
-    const timer = setTimeout(() => c.kill('SIGTERM'), o.timeoutS * 1000);
-    const stopper = setInterval(() => { if (o.abbruch()) c.kill('SIGTERM'); }, 2000);
+    let zu = false;
+    const timer = setTimeout(() => { zu = true; void beenden(r.id); }, o.timeoutS * 1000);
+    const stopper = setInterval(() => { if (!zu && o.abbruch()) { zu = true; clearInterval(stopper); void beenden(r.id); } }, 2000);
     c.on('close', (code) => { clearTimeout(timer); clearInterval(stopper); res({ code, stdout: so, stderr: se }); });
     c.on('error', () => { clearTimeout(timer); clearInterval(stopper); res({ code: -1, stdout: so, stderr: se }); });
   });
@@ -2634,8 +2641,8 @@ async function strangJcode(live: Live, req: TurnRequest, prompt: string): Promis
     const timeoutS = envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60);
     const model = jcodeModell(mel, reihe[i] ?? reihe[0]);
     const out = art === 'opencode'
-      ? await opencodeSpawn({ cwd: e.dir, prompt, timeoutS, abbruch: () => live.abort.signal.aborted })
-      : await jcodeSpawn({ cwd: e.dir, prompt, model, tools: 'read,bash,agentgrep,write,edit', key: mel.token, timeoutS, abbruch: () => live.abort.signal.aborted });
+      ? await opencodeSpawn({ cwd: e.dir, prompt, timeoutS, abbruch: () => live.abort.signal.aborted, besitzer: live.key })
+      : await jcodeSpawn({ cwd: e.dir, prompt, model, tools: 'read,bash,agentgrep,write,edit', key: mel.token, timeoutS, abbruch: () => live.abort.signal.aborted, besitzer: live.key });
     const a = art === 'opencode' ? { j: out.code === 0 ? { text: out.stdout } : null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as MeliousUsage, draussen: [] as string[], gelaufen: 'opencode' } : jcodeAuswerten(out, e.dir, model);
     const energie = art === 'jcode' && mel.faktoren ? energieOf(a.usage, a.gelaufen, mel.faktoren) : 0;
     live.usage.input += a.usage.input + a.usage.cacheRead; live.usage.output += a.usage.output;
@@ -2888,7 +2895,7 @@ export async function ensembleLaufen(o: EnsAufruf): Promise<EnsErgebnis & { prot
   const buche = (u: MeliousUsage, m: string) => { try { o.buchen?.(u, m); } catch { /* egal */ } };
   const jcode: Lauf = async (m, p, rolle) => {
     const t0 = Date.now();
-    const out = await jcodeSpawn({ cwd: o.cwd, prompt: p, model: m, tools: 'read,bash,agentgrep', key: o.mel.token, timeoutS, abbruch: o.abbruch });
+    const out = await jcodeSpawn({ cwd: o.cwd, prompt: p, model: m, tools: 'read,bash,agentgrep', key: o.mel.token, timeoutS, abbruch: o.abbruch, besitzer: `ensemble:${o.kontext}` });
     const a = jcodeAuswerten(out, o.cwd, m);
     buche(a.usage, a.gelaufen);
     const text = String(a.j?.text ?? '').trim();
@@ -3031,7 +3038,7 @@ export async function melSub(userId: string, convId: string, b: { auftrag?: unkn
       laeufer = oc2 ? 'opencode2' : 'jcode';
       const r = oc2
         ? await oc2.zug({ cwd, prompt, model: m, timeoutS, abbruch, titel: `mel-sub ${key}` }).then((x) => ({ out: { code: x.code }, j: x.code === 0 ? { text: x.text } : null, usage: x.usage, gelaufen: x.gelaufen, grund: x.grund }))
-        : await jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined }));
+        : await jcodeSpawn({ cwd, prompt, model: m, tools: 'read,bash,agentgrep', key: mel.token, timeoutS, abbruch, besitzer: `mel-sub:${key}` }).then((o) => ({ out: o as { code: number | null }, ...jcodeAuswerten(o, cwd, m), grund: undefined as string | undefined }));
       buche(r.usage, r.gelaufen, r.out.code === 0 && !!r.j);
       return r;
     };
