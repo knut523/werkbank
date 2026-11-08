@@ -197,7 +197,10 @@ export const BEFUNDE_FORM = [
 
 /** Eine Review je (headSha, baseSha, Zahl der Kommentare) nur einmal — gleicher Schlüssel, gleiches Urteil. WERKBANK_REVIEW_DEDUPE=aus schaltet ab. */
 export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_REVIEW_DEDUPE !== 'aus';
-export const reviewSchluessel = (k: { headSha: string; baseSha: string | null; kommentare: number }) => `${k.headSha}|${k.baseSha ?? '-'}|${k.kommentare}`;
+export const reviewSchluessel = (k: { headSha: string; baseSha: string | null; kommentare: number; deep?: boolean }) => `${k.headSha}|${k.baseSha ?? '-'}|${k.kommentare}${k.deep ? '|deep' : ''}`;
+/** Schlüssel eines Reviews oder null, wenn der GitHub-Kontext fehlt (Kommentarzahl unbekannt → nie ein altes Urteil wiederverwenden). */
+export const reviewSchluesselFuer = (k: { headSha: string; baseSha: string | null; kontext: Parameters<typeof kommentarZahl>[0]; deep?: boolean }): string | null =>
+  k.kontext ? reviewSchluessel({ headSha: k.headSha, baseSha: k.baseSha, kommentare: kommentarZahl(k.kontext), deep: k.deep }) : null;
 /** Alle Kommentare des PR (Konversation, Reviews mit Text, Inline-Kommentare) als eine Zahl. */
 export const kommentarZahl = (k: { comments: unknown[]; reviews: { body: string }[]; threads: { comments: unknown[] }[] } | null | undefined) =>
   k ? k.comments.length + k.reviews.filter((r) => r.body?.trim()).length + k.threads.reduce((n, t) => n + t.comments.length, 0) : 0;

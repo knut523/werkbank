@@ -39,3 +39,13 @@ test('B5: Feedback geht an den Strang, der den PR besitzt — Review-Stränge z�
   assert.equal(besitzerStrang([s[0]], 'WirStrom1/olaf-admin', 7), null, 'nur der Review-Strang → neuer Strang');
   assert.equal(besitzerAn({}), true); assert.equal(besitzerAn({ WERKBANK_FIX_BESITZER: 'aus' }), false);
 });
+
+import { reviewSchluesselFuer } from '../server/reviewmotor.ts';
+
+test('B3-Fix: Kontext fehlt → kein Schlüssel (kein Dedupe); Deep-Modus ändert den Schlüssel', () => {
+  assert.equal(reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: null }), null);
+  const k = { comments: [], reviews: [], threads: [] };
+  const normal = reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: k })!;
+  assert.ok(normal);
+  assert.notEqual(normal, reviewSchluesselFuer({ headSha: 'h', baseSha: 'b', kontext: k, deep: true }));
+});

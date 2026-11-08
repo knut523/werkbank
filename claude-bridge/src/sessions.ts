@@ -3166,7 +3166,7 @@ function newDeleg(userId: string, parent: string, parentConv: string, rolle: Rol
 /** B3: Dedupe-Schlüssel eines geprüften Stands (Kopf der Delegation, Basis des Unter-Worktrees); null, wenn Kopf/Basis fehlen. */
 export function pruefSchluessel(of: Deleg | undefined, kommentare = 0): string | null {
   const headSha = of?.git?.kopf, baseSha = of?.wt?.base;
-  return headSha && baseSha ? reviewSchluessel({ headSha, baseSha, kommentare }) : null;
+  return headSha && baseSha ? reviewSchluessel({ headSha, baseSha, kommentare, baum: of?.git?.baum }) : null;
 }
 
 /** Prüfer für eine fertige Bauer-/Schreiber-Delegation: Modell ≠ Autor, Klasse ≥ Autor; keiner frei → „ungeprüft“ (kein stiller Ersatz). */
