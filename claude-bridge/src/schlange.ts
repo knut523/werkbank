@@ -35,6 +35,19 @@ function speichern(): void {
     renameSync(datei + '.tmp', datei);
   } catch { /* Platte voll o. ä.: die Schlange im Speicher läuft weiter */ }
 }
+// Drain vor dem Neustart (Release-Blocker): ab SIGTERM/SIGINT keine neuen Plätze; Wartende bleiben in schlange.json.
+let drainAb = false;
+/** Frist in Sekunden (BRIDGE_DRAIN_SEK, Vorgabe 120); BRIDGE_DRAIN=aus: sofort beenden wie bisher. */
+export const drainSek = () => { if (String(process.env.BRIDGE_DRAIN ?? '').toLowerCase() === 'aus') return 0; const s = Number(process.env.BRIDGE_DRAIN_SEK ?? 120); return Number.isFinite(s) && s >= 0 ? s : 120; };
+export const drainAktiv = () => drainAb;
+/** Keine neuen Plätze mehr vergeben, laufende Läufe bis zur Frist beenden lassen, Schlange sichern. Gibt zurück, ob alles leer lief. */
+export async function drain(laufend: () => number, o: { fristSek?: number; takt?: number } = {}): Promise<boolean> {
+  drainAb = true;
+  const bis = Date.now() + (o.fristSek ?? drainSek()) * 1000;
+  while (laufend() > 0 && Date.now() < bis) await new Promise((r) => setTimeout(r, o.takt ?? 1000));
+  speichern();
+  return laufend() === 0;
+}
 const wecker = new Set<() => void>();
 // Nach einem Start bis zum nächsten Takt niemanden starten: der Gestartete ist erst danach als laufend eingetragen.
 let startSperre = false;
@@ -107,7 +120,7 @@ export async function warte(p: Omit<Platz, 'since' | 'grund'>, o: { frei: () => 
       const h = !!o.gehalten?.();
       if (h !== !!platz.gehalten) { platz.gehalten = h; if (!h) wecke(); }
       const pos = position(schlange, p.key, now());
-      if (pos === 1 && !startSperre && o.frei()) { gestartet = true; startSperre = true; return 'start'; }
+      if (pos === 1 && !startSperre && !drainAb && o.frei()) { gestartet = true; startSperre = true; return 'start'; }
       const g = o.grund?.() ?? platz.grund;
       if (g !== platz.grund) { platz.grund = g; speichern(); }
       if (!o.ohneDeckel && now() - ankunft > maxWarteMs()) return 'zeit';   // Deckel je Verbindung, nicht ab dem gemerkten Platz (Gegenprüfung 05.11.)
@@ -142,4 +155,4 @@ export function angemeldet(): void {
 }
 
 /** Nur für Tests. */
-export function _leeren(): void { schlange.length = 0; wecker.clear(); startSperre = false; frueher.clear(); datei = null; }
+export function _leeren(): void { schlange.length = 0; wecker.clear(); startSperre = false; frueher.clear(); datei = null; drainAb = false; }

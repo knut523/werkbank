@@ -10,6 +10,7 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { drain, drainSek } from './schlange.ts';
 import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
 import { orchDirProblem } from './tools.ts';
@@ -564,4 +565,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => log('listening', { host: HOST, port: PORT, mock: MOCK }));
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { log('shutdown', { sig }); server.close(); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => {
+  log('shutdown', { sig }); server.close();
+  if (drainSek() <= 0) process.exit(0);
+  void drain(() => stats().drainLaufend).then((leer) => { log('drain', { leer }); process.exit(0); });
+});

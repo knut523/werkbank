@@ -2,7 +2,7 @@
 // Verbindung weg, Zeitdeckel, Aufrücken nach dem Ende eines Zugs.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, alterMs, lebenszeichenMs, merkeIn, vergiss, _leeren, type Platz } from '../src/schlange.ts';
+import { reihe, position, warte, wecke, inSchlange, laenge, angemeldet, maxWarteMs, alterMs, lebenszeichenMs, merkeIn, vergiss, drain, _leeren, type Platz } from '../src/schlange.ts';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -214,4 +214,21 @@ test('Phase 4 (A8/K6): von Knut aus der Schlange genommen → kein gemerkter Pla
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(inSchlange('x')?.since, 9_000, 'neuer Platz, nicht der alte');
   zu = true; wecke(); await x2;
+});
+
+test('Drain: keine neuen Plätze, Frist wird abgewartet, Wartende bleiben in schlange.json', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'drain-'));
+  const f = join(d, 'schlange.json');
+  merkeIn(f);
+  let zu = false;
+  let laufend = 1;
+  setTimeout(() => { laufend = 0; }, 60);
+  const t0 = Date.now();
+  const dr = drain(() => laufend, { fristSek: 5, takt: 10 });
+  const w = warte({ key: 'w', userId: 'u', vorrang: false }, { frei: () => true, geschlossen: () => zu, melde: () => {}, takt: 10 });
+  assert.equal(await Promise.race([w, new Promise((r) => setTimeout(() => r('wartet'), 120))]), 'wartet');
+  assert.equal(await dr, true);
+  assert.ok(Date.now() - t0 >= 50);
+  assert.equal(JSON.parse(readFileSync(f, 'utf8')).plaetze[0].key, 'w');
+  zu = true; assert.equal(await w, 'zu');
 });
