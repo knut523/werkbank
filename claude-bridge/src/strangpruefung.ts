@@ -1,6 +1,6 @@
 // Strang-Prüfung (plan-strangpruefung-produkt.md, L1): nach dem Bauen prüfen zwei Prüfer (Linsen) parallel, indem sie NEUE Tests schreiben.
 // Die Bridge lässt diese Tests auf dem aktuellen HEAD laufen (Prüfer und Bauer haben nur eine Lese-Shell); nur rote zählen.
-// Neue rote Tests → Bauer-Fixrunde → nächste Runde. Ende: keine neuen roten Tests, oder Deckel. Alles Äußere wird injiziert.
+// Neue rote Tests → Bauer-Fixrunde → nächste Runde. Ende: nichts mehr rot auf HEAD (auch frühere rote Tests laufen nach jedem Fix erneut), oder Deckel. Alles Äußere wird injiziert.
 
 export const BAUER_REGELN = [
   'Regeln für diese Änderung:',
@@ -24,7 +24,7 @@ export function ergebnisLesen(text: string): Ergebnis {
 }
 
 export type Ende = 'konvergiert' | 'deckel' | 'pruefer-ohne-ergebnis';
-export type Phase = { runde: number; bauMs: number; pruefMs: number; fixMs: number };
+export type Phase = { runde: number; testMs: number; pruefMs: number; fixMs: number };
 export type SchleifenDeps = {
   /** Prüfer mit dieser Linse: Endtext und die von ihm geschriebenen Testdateien. */
   pruefen: (linse: string, runde: number) => Promise<{ text: string; tests: string[] }>;
@@ -34,9 +34,9 @@ export type SchleifenDeps = {
   fixen: (log: string, runde: number) => Promise<void>;
   jetzt?: () => number;
 };
-export type SchleifenErgebnis = { ende: Ende; runden: number; roteTests: string[]; phasen: Phase[] };
+export type SchleifenErgebnis = { ende: Ende; runden: number; roteTests: string[]; offen: string[]; phasen: Phase[] };
 
-/** bauMs = Zeit der Testläufe auf HEAD (rotAufHead), pruefMs = Prüferrunde, fixMs = Fixrunde (0 wenn keine). */
+/** testMs = Zeit der Testläufe auf HEAD (rotAufHead), pruefMs = Prüferrunde, fixMs = Fixrunde (0 wenn keine). */
 export async function pruefSchleife(deps: SchleifenDeps, maxRunden = 4): Promise<SchleifenErgebnis> {
   const jetzt = deps.jetzt ?? Date.now;
   const gesehen = new Set<string>();
@@ -45,16 +45,16 @@ export async function pruefSchleife(deps: SchleifenDeps, maxRunden = 4): Promise
     const t0 = jetzt();
     const antworten = await Promise.all(LINSEN.map((l) => deps.pruefen(l, runde)));
     const t1 = jetzt();
-    const tests = [...new Set(antworten.flatMap((a) => a.tests))];
+    // Alles, was je rot war, läuft erneut (der Fix muss wirken), dazu die neuen Tests dieser Runde.
+    const tests = [...new Set([...gesehen, ...antworten.flatMap((a) => a.tests)])];
     const { rot, log } = tests.length ? await deps.rotAufHead(tests) : { rot: [] as string[], log: '' };
     const t2 = jetzt();
-    const neu = rot.filter((t) => !gesehen.has(t));
-    neu.forEach((t) => gesehen.add(t));
-    const phase: Phase = { runde, bauMs: t2 - t1, pruefMs: t1 - t0, fixMs: 0 };
+    rot.forEach((t) => gesehen.add(t));
+    const phase: Phase = { runde, testMs: t2 - t1, pruefMs: t1 - t0, fixMs: 0 };
     phasen.push(phase);
     const ohne = antworten.some((a) => ergebnisLesen(a.text).art === 'ohne');
-    const fertig = (ende: Ende): SchleifenErgebnis => ({ ende, runden: runde, roteTests: [...gesehen], phasen });
-    if (!neu.length) return fertig(ohne ? 'pruefer-ohne-ergebnis' : 'konvergiert');
+    const fertig = (ende: Ende): SchleifenErgebnis => ({ ende, runden: runde, roteTests: [...gesehen], offen: [...rot], phasen });
+    if (!rot.length) return fertig(ohne ? 'pruefer-ohne-ergebnis' : 'konvergiert');
     if (runde >= maxRunden) return fertig('deckel');
     await deps.fixen(log, runde);
     phase.fixMs = jetzt() - t2;

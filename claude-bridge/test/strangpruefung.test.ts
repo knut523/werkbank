@@ -57,6 +57,8 @@ test('(d) zwei rote → ein Fix mit Log → Runde 2 keine → konvergiert', asyn
     (l, r) => r === 1 ? { text: 'ERGEBNIS: 1 rote Tests', tests: [LINSEN[0] === l ? 'a' : 'b'] } : { text: KEINE, tests: [] },
     (t) => t,
   );
+  let n = 0;
+  deps.rotAufHead = async (t) => (n++ === 0 ? { rot: t, log: t.map((x) => `FAIL ${x}`).join('\n') } : { rot: [], log: '' });
   const r = await pruefSchleife(deps);
   assert.equal(r.ende, 'konvergiert');
   assert.equal(r.runden, 2);
@@ -67,12 +69,31 @@ test('(d) zwei rote → ein Fix mit Log → Runde 2 keine → konvergiert', asyn
   assert.match(fix[0].log, /FAIL b/);
 });
 
-test('(d2) bekannter roter Test in Runde 2 ist kein neuer Befund', async () => {
-  const { deps, fix } = mk(() => ({ text: 'ERGEBNIS: 1 rote Tests', tests: ['a'] }), (t) => t);
+test('(d2) Fix wirkt nicht: roter Test bleibt offen, kein konvergiert', async () => {
+  const { deps, fix } = mk((_l, r) => ({ text: r === 1 ? 'ERGEBNIS: 1 rote Tests' : KEINE, tests: r === 1 && _l === LINSEN[0] ? ['A'] : [] }), (t) => t);
+  const aufrufe: string[][] = [];
+  const r0 = deps.rotAufHead;
+  deps.rotAufHead = async (t) => { aufrufe.push(t); return r0(t); };
+  const r = await pruefSchleife(deps);
+  assert.notEqual(r.ende, 'konvergiert');
+  assert.equal(r.ende, 'deckel');
+  assert.deepEqual(r.offen, ['A']);
+  assert.deepEqual(r.roteTests, ['A']);
+  assert.deepEqual(aufrufe[1], ['A']);
+  assert.equal(fix.length, 3);
+});
+
+test('(d3) Fix wirkt: A in Runde 2 grün → konvergiert, offen leer', async () => {
+  let n = 0;
+  const { deps } = mk((l, r) => ({ text: r === 1 ? 'ERGEBNIS: 1 rote Tests' : KEINE, tests: r === 1 && l === LINSEN[0] ? ['A'] : [] }), () => []);
+  const aufrufe: string[][] = [];
+  deps.rotAufHead = async (t) => { aufrufe.push(t); return n++ === 0 ? { rot: t, log: 'FAIL A' } : { rot: [], log: '' }; };
   const r = await pruefSchleife(deps);
   assert.equal(r.ende, 'konvergiert');
   assert.equal(r.runden, 2);
-  assert.equal(fix.length, 1);
+  assert.deepEqual(r.offen, []);
+  assert.deepEqual(r.roteTests, ['A']);
+  assert.deepEqual(aufrufe[1], ['A']);
 });
 
 test('(e) jede Runde neuer roter Test → Deckel nach 4 Runden', async () => {
@@ -91,7 +112,9 @@ test('(f) Linse ohne ERGEBNIS ist nie sauber', async () => {
   assert.equal(r.ende, 'pruefer-ohne-ergebnis');
   assert.equal(r.runden, 1);
   // andere Linse liefert rot → weiter fixen
-  const b = mk((l, rd) => l === LINSEN[0] ? { text: 'plaudert', tests: [] } : rd === 1 ? { text: 'ERGEBNIS: 1 rote Tests', tests: ['x'] } : { text: KEINE, tests: [] }, (t) => t);
+  const b = mk((l, rd) => l === LINSEN[0] ? { text: 'plaudert', tests: [] } : rd === 1 ? { text: 'ERGEBNIS: 1 rote Tests', tests: ['x'] } : { text: KEINE, tests: [] }, (t) => t, {});
+  let nr = 0;
+  b.deps.rotAufHead = async (t) => ({ rot: nr++ === 0 ? t : [], log: 'FAIL' });
   const r2 = await pruefSchleife(b.deps);
   assert.equal(b.fix.length, 1);
   assert.equal(r2.ende, 'pruefer-ohne-ergebnis');
@@ -105,12 +128,12 @@ test('(g) Phasenzeiten mit injizierter Uhr', async () => {
   const { deps } = mk((_l, r) => ({ text: r === 1 ? 'ERGEBNIS: 1 rote Tests' : KEINE, tests: r === 1 ? ['a'] : [] }), (x) => x, {
     jetzt,
     pruefen: async (_l, r) => { t += 10; return { text: r === 1 ? 'ERGEBNIS: 1 rote Tests' : KEINE, tests: r === 1 ? ['a'] : [] }; },
-    rotAufHead: async (x) => { t += 3; return { rot: x, log: 'FAIL' }; },
+    rotAufHead: async (x) => { t += 3; return { rot: t === 23 ? x : [], log: 'FAIL' }; },
     fixen: async () => { t += 7; },
   });
   const r = await pruefSchleife(deps);
   assert.deepEqual(r.phasen, [
-    { runde: 1, bauMs: 3, pruefMs: 20, fixMs: 7 },
-    { runde: 2, bauMs: 0, pruefMs: 20, fixMs: 0 },
+    { runde: 1, testMs: 3, pruefMs: 20, fixMs: 7 },
+    { runde: 2, testMs: 3, pruefMs: 20, fixMs: 0 },
   ]);
 });
