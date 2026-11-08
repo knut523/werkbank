@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from '../src/bauerstrang.ts';
 import { bauerEreignisse, statistikLaden, SONNET } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
+import { BAUER_REGELN } from '../src/strangpruefung.ts';
 
 const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
 function repo() {
@@ -16,7 +17,8 @@ function repo() {
 }
 const zeilen = (n: number) => `export const a = 0;\n${Array.from({ length: n }, (_, i) => `// z${i}\n`).join('')}`;
 const gebaut: string[] = [];
-const zug = (n: Record<string, number>) => async (dir: string, m: string) => { gebaut.push(m); writeFileSync(join(dir, 'src/a.ts'), zeilen(n[m] ?? 9)); return { ok: true, text: `fertig ${m}`, grund: '' }; };
+const PRUEFER_SAUBER = { ok: true, text: 'ERGEBNIS: keine Befunde', grund: '' };   // L2: der Prüfer der Strang-Prüfung findet in diesen Tests nichts
+const zug = (n: Record<string, number>) => async (dir: string, m: string, prompt = '') => { if (prompt.startsWith('Linse')) return PRUEFER_SAUBER; gebaut.push(m); writeFileSync(join(dir, 'src/a.ts'), zeilen(n[m] ?? 9)); return { ok: true, text: `fertig ${m}`, grund: '' }; };
 const pruefe = async () => ({ ok: true, log: '' });
 
 test('Flag aus → alter Pfad (null), nichts gebaut', async () => {
@@ -71,7 +73,7 @@ test('Sieger-Diff jenseits 4 MB: run() kürzt auf die letzten 2 MB → Diff land
   const { wurzel, cwd } = repo(); gebaut.length = 0;
   // ~5,4 MB Datei: der Diff überschreitet die Innengrenze von run() (delegation.ts: > 4 MB → slice(-2 MB)).
   const gross = `export const a = 0;\n${Array.from({ length: 6000 }, (_, i) => `// z${i} ${'x'.repeat(900)}\n`).join('')}`;
-  const riesigerZug = async (dir: string, m: string) => { gebaut.push(m); writeFileSync(join(dir, 'src/a.ts'), gross); return { ok: true, text: `fertig ${m}`, grund: '' }; };
+  const riesigerZug = async (dir: string, m: string, prompt = '') => { if (prompt.startsWith('Linse')) return PRUEFER_SAUBER; gebaut.push(m); writeFileSync(join(dir, 'src/a.ts'), gross); return { ok: true, text: `fertig ${m}`, grund: '' }; };
   try {
     const r = await bestofnStrang({ cwd, id: 'x9', prompt: 'ändere src/a.ts', env: {}, zug: riesigerZug, pruefe });
     assert.equal(r?.ok, true, 'Sieger-Diff > 4 MB muss anwendbar bleiben (max: 50_000_000 greift nicht, run() kürzt bei 4 MB)');
@@ -158,6 +160,7 @@ test('L3c: beide Rennbauer rot, Retry (erster Bauer, eigener Worktree) baut wirk
   const { wurzel, cwd } = repo();
   const aufrufe: { m: string; dir: string; prompt: string }[] = [];
   const retryZug = async (dir: string, m: string, prompt: string) => {
+    if (prompt.startsWith('Linse')) return PRUEFER_SAUBER;
     aufrufe.push({ m, dir, prompt });
     writeFileSync(join(dir, 'src/a.ts'), zeilen(aufrufe.length > 2 ? 3 : 9));
     if (aufrufe.length > 2) g(dir, 'commit', '-q', '-a', '-m', 'retry');
@@ -186,4 +189,111 @@ test('L3b: ablehnungsZiel — Eskalation (modell sonnet) geht an die Sonnet-Klas
   assert.equal(ablehnungsZiel({ art: 'verlierer', bauer: FLASH }), null);
   assert.equal(ablehnungsZiel(null), null);
   rmSync(wurzel, { recursive: true, force: true });
+});
+
+// ---- L2: Strang-Prüfung im Best-of-N-Strang ------------------------------------------------------------------------------------------
+const PRUEFTEST = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\ntest('fix da', () => assert.match(readFileSync(new URL('./a.ts', import.meta.url), 'utf8'), /\\/\\/ fix/));\n";
+/** Bauer: DeepSeek baut klein (gewinnt). Prüfer (Prompt beginnt mit "Linse"): Linse 1 schreibt einen roten Test, solange der Fix fehlt; sonst "keine Befunde". Fixer ("## Fixrunde"): hängt "// fix" an. */
+function l2Zug(log: { m: string; prompt: string }[], opt: { ohneErgebnis?: boolean; boese?: boolean; manip?: boolean } = {}) {
+  return async (dir: string, m: string, prompt: string, _signal?: AbortSignal) => {
+    log.push({ m, prompt });
+    const a = join(dir, 'src/a.ts');
+    if (prompt.startsWith('Linse')) {
+      if (opt.ohneErgebnis) return { ok: true, text: 'ich habe nichts gesagt', grund: '' };
+      const fehlt = !readFileSync(a, 'utf8').includes('// fix');
+      if (fehlt && prompt.startsWith('Linse Logik')) writeFileSync(join(dir, 'src/pruef.test.ts'), PRUEFTEST);
+      if (fehlt && opt.boese) { writeFileSync(a, readFileSync(a, 'utf8') + '// BÖSE\n'); writeFileSync(join(dir, 'src/extra.ts'), 'export const x = 1;\n'); }
+      return { ok: true, text: fehlt && prompt.startsWith('Linse Logik') ? 'ERGEBNIS: 1 rote Tests' : 'ERGEBNIS: keine Befunde', grund: '' };
+    }
+    if (prompt.startsWith('## Fixrunde') && opt.manip) { writeFileSync(join(dir, 'src/pruef.test.ts'), "import { test } from 'node:test';\ntest('trivial', () => {});\n"); return { ok: true, text: 'getrickst', grund: '' }; }
+    if (prompt.startsWith('## Fixrunde')) { writeFileSync(a, readFileSync(a, 'utf8') + '// fix\n'); return { ok: true, text: 'gefixt', grund: '' }; }
+    writeFileSync(a, zeilen(m === DEEPSEEK ? 2 : 6)); return { ok: true, text: `fertig ${m} GEHEIMER-BAUERTEXT`, grund: '' };
+  };
+}
+
+test('L2: Prüfer schreibt roten Test, Fixrunde, Runde 2 sauber → Strang bekommt Fix + Prüfer-Test; Ledger mit phasen (≥ 2 Runden) und gateLog; Prüfer-Prompt nur Diff/DoD/Tests', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2a', prompt: 'ändere src/a.ts, DoD-MARKER', env: {}, zug: l2Zug(log), pruefe });
+    assert.equal(r?.ok, true, JSON.stringify(r));
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2) + '// fix\n', 'Fix im Strang');
+    assert.equal(readFileSync(join(cwd, 'src/pruef.test.ts'), 'utf8'), PRUEFTEST, 'Prüfer-Test im Strang');
+    const e = ev.find((x) => x.id === 'l2a');
+    assert.ok(e.phasen.length >= 2, `phasen: ${JSON.stringify(e.phasen)}`); assert.ok(Array.isArray(e.gateLog) && e.gateLog.length > 0, 'gateLog');
+    const pruefer = log.filter((x) => x.prompt.startsWith('Linse'));
+    assert.ok(pruefer.length >= 4, 'beide Linsen, zwei Runden');
+    assert.ok(pruefer.every((x) => x.m === FLASH), 'Prüfer = das andere Modell als der Sieger (DeepSeek)');
+    assert.ok(log.filter((x) => x.prompt.startsWith('## Fixrunde')).every((x) => x.m === DEEPSEEK), 'Fixer = Siegermodell');
+    for (const x of pruefer) { assert.match(x.prompt, /DoD-MARKER/); assert.match(x.prompt, /^diff --git/m); assert.ok(!x.prompt.includes('GEHEIMER-BAUERTEXT'), 'kein Bauertext'); assert.ok(!x.prompt.includes(BAUER_REGELN), 'keine Bauerregeln'); }
+    assert.ok(log.filter((x) => !x.prompt.startsWith('Linse') && !x.prompt.startsWith('## Fixrunde')).every((x) => x.prompt.includes(BAUER_REGELN)), 'Bauer-Prompt hat BAUER_REGELN');
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: BRIDGE_STRANGPRUEFUNG=aus → alter Pfad: kein Prüfer, keine Regeln im Prompt, Diff unverändert, kein phasen im Ledger', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2b', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: l2Zug(log), pruefe });
+    assert.equal(r?.ok, true);
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2)); assert.equal(existsSync(join(cwd, 'src/pruef.test.ts')), false);
+    assert.equal(log.length, 2, 'nur die zwei Bauer'); assert.ok(log.every((x) => !x.prompt.includes(BAUER_REGELN)));
+    assert.equal(ev.find((x) => x.id === 'l2b').phasen, undefined);
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: roter voller Lauf nach der Schleife → L3-Kette, am Ende nie ok (Sonnet-Übergabe), nichts angewendet', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  const voll = async (dir: string, _b: string, art: 'schnell' | 'voll') => (art === 'voll' && existsSync(join(dir, 'src/pruef.test.ts')) ? { ok: false, log: 'voll rot nach Schleife' } : { ok: true, log: '' });
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2c', prompt: 'ändere src/a.ts', env: {}, zug: l2Zug(log), pruefe: voll });
+    assert.equal(r?.ok, false, JSON.stringify(r)); assert.match(r!.grund, /Sonnet-Klasse/);
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: Prüfer ohne ERGEBNIS-Zeile gilt nie als sauber → nicht ok', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2d', prompt: 'ändere src/a.ts', env: {}, zug: l2Zug(log, { ohneErgebnis: true }), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: Prüfer hängt → 10-min-Deckel geht über das Abort-Signal an zug, Aufruf wird wirklich beendet', async () => {
+  const { wurzel, cwd } = repo(); let signalAbgebrochen = false, beendet = false; const tor: { auf?: () => void } = {};
+  const zug = async (dir: string, m: string, prompt: string, signal?: AbortSignal) => {
+    if (!prompt.startsWith('Linse')) { writeFileSync(join(dir, 'src/a.ts'), zeilen(m === DEEPSEEK ? 2 : 6)); return { ok: true, text: 'x', grund: '' }; }
+    await new Promise<void>((res) => { signal?.addEventListener('abort', () => { signalAbgebrochen = true; res(); }); tor.auf = res; });
+    beendet = true; return { ok: false, text: '', grund: 'abgebrochen' };
+  };
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2e', prompt: 'ändere src/a.ts', env: { BRIDGE_PRUEFER_DECKEL_S: '0.05' }, zug, pruefe });
+    assert.equal(signalAbgebrochen, true); assert.equal(beendet, true, 'gekappter Prüfer ist beendet, nicht liegengelassen');
+    assert.equal(r?.ok, false, 'Prüfer ohne Ergebnis ist nie sauber');
+  } finally { tor.auf?.(); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: Prüfer ändert Produktcode und legt Nicht-Test an → verworfen (Builder-Stand im Strang), Test bleibt, gateLog nennt es', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2f', prompt: 'ändere src/a.ts', env: {}, zug: l2Zug(log, { boese: true }), pruefe });
+    assert.equal(r?.ok, true, JSON.stringify(r));
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2) + '// fix\n', 'Prüfer-Änderung am Produktcode verworfen');
+    assert.equal(existsSync(join(cwd, 'src/extra.ts')), false, 'neue Nicht-Test-Datei verworfen');
+    assert.equal(readFileSync(join(cwd, 'src/pruef.test.ts'), 'utf8'), PRUEFTEST, 'Prüfer-Test bleibt');
+    assert.ok(ev.find((x) => x.id === 'l2f').gateLog.some((l: string) => /Prüfer änderte Nicht-Test: .*src\/a\.ts.*src\/extra\.ts.*verworfen|Prüfer änderte Nicht-Test: .*src\/extra\.ts.*src\/a\.ts.*verworfen/.test(l)), 'gateLog');
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L2: Fixer ändert den roten Prüfer-Test → Test wiederhergestellt, Schleife endet "manipuliert", nie ok, nichts angewendet', async () => {
+  const { wurzel, cwd } = repo(); const log: { m: string; prompt: string }[] = [];
+  const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'l2g', prompt: 'ändere src/a.ts', env: {}, zug: l2Zug(log, { manip: true }), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n'); assert.equal(existsSync(join(cwd, 'src/pruef.test.ts')), false, 'nichts angewendet');
+    assert.ok(ev.find((x) => x.id === 'l2g').gateLog.some((l: string) => /Fixer änderte Prüfer-Test: src\/pruef\.test\.ts/.test(l)), 'gateLog');
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
 });

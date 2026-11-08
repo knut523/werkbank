@@ -1,11 +1,13 @@
 // Einhängepunkt für Best-of-N im OC2-Strang (sessions.ts strangOc2): beide Flash-Bauer bauen in eigenen Unter-Worktrees (subWorktree),
 // der Sieger-Diff landet im Strang-Worktree. Alles Äußere (Zug, Prüfungen) wird injiziert, damit der Test ohne Modelle läuft.
 // null = alter Pfad (Best-of-N aus, kein Git, abgeschaltet). Schutzzone (aus den Pfaden im Auftrag) → { ok: false } → Claude baut.
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
 import { budgetGrund } from './kapazitaet.ts';
+import { pruefSchleife, BAUER_REGELN, type Phase } from './strangpruefung.ts';
+import { FLASH, DEEPSEEK } from './modellwahl.ts';
 import { subWorktree, removeWorktree, run } from './delegation.ts';
 
 type Env = Record<string, string | undefined>;
@@ -59,6 +61,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return sonnetUebergabe();
   let zone = false;
+  const schleifeAn = String(env.BRIDGE_STRANGPRUEFUNG ?? '').trim().toLowerCase() !== 'aus';   // L2-Schalter, Standard an
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
   // Jeder Versuch hat eigene Worktree-Identität (Zähler je Bauer): der Retry des ersten Bauers kollidiert nicht mit dessen Rennversuch.
   // subs = jüngster Versuch je Bauer (schnell/voll prüfen den Kandidaten direkt nach dem Bauen); alle = jeder Versuch, für das Aufräumen.
@@ -71,7 +74,8 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       if ('error' in s) return { bauer, ok: false, diff: '', log: s.error };
       subs.set(bauer, { dir: s.dir, base: s.base }); alle.push({ bauer, dir: s.dir, branch: s.branch });
       o.status?.(`⏳ Best-of-N: ${bauer} baut in eigenem Worktree …`);
-      const p = op?.fehlerlogs?.length ? `${a.plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : a.plan;
+      const plan = schleifeAn ? `${a.plan}\n\n${BAUER_REGELN}` : a.plan;   // L2: lean Test-first-Regeln nur mit Strang-Prüfung
+      const p = op?.fehlerlogs?.length ? `${plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : plan;
       const r = await o.zug(s.dir, bauer, p, op?.signal);
       texte.set(bauer, r.text);
       await git(s.dir, 'add', '-A');
@@ -84,6 +88,74 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       return { bauer, ok: r.ok && !!diff.trim(), diff, log: r.ok ? 'keine Änderung' : r.grund };
     
   };
+  // ---- L2: Strang-Prüfung. Prüfer = das andere Modell, Fixer = Siegermodell; jeder Aufruf mit 10-min-Deckel über das Abort-Signal (mitDeckel). ----
+  let phasen: Phase[] | undefined, ledgerEvent: Parameters<NonNullable<Deps['ledger']>>[0] | undefined;
+  const gateLog: string[] = [], geschleift = new WeakSet<object>();
+  const prueferMs = (() => { const n = Number(env.BRIDGE_PRUEFER_DECKEL_S); return Number.isFinite(n) && n > 0 ? n * 1000 : 600_000; })();
+  const gedeckelt = async (dir: string, modell: string, prompt: string): Promise<string> => {
+    let text = '';
+    const r = await mitDeckel(async (signal) => { const z = await o.zug(dir, modell, prompt, signal); text = z.text; return { bauer: modell, ok: z.ok, diff: '', log: z.ok ? '' : z.grund }; }, modell, prueferMs, abbruchFristMs(env)).catch(() => null);
+    return !r || r.log === DECKEL_LOG ? '' : text;
+  };
+  const diffVon = async (dir: string, base: string) => { await git(dir, 'add', '-A'); return (await git(dir, 'diff', '--cached', '--binary', '--no-color', base)).out; };
+  const neueTests = async (dir: string) => (await git(dir, 'ls-files', '-o', '--exclude-standard')).out.split('\n').filter((f) => /\.test\.[cm]?[jt]s$/.test(f));
+  async function testLauf(dir: string, f: string): Promise<{ ok: boolean; log: string }> {
+    let d = dirname(f); while (d !== '.' && !existsSync(join(dir, d, 'package.json'))) d = dirname(d);
+    return pruefLauf(join(dir, d), 'env', ['-u', 'NODE_TEST_CONTEXT', 'node', '--test', d === '.' ? f : f.slice(d.length + 1)]);
+  }
+  /** Der Prüfer darf nur NEUE Testdateien schreiben: alles andere (geänderte/gelöschte getrackte Dateien, neue Nicht-Tests) wird auf den Stand vor dem Prüfer zurückgesetzt (Index = Stand nach diffVon). */
+  async function nurTests(dir: string): Promise<void> {
+    const zeilen = (await git(dir, '-c', 'core.quotepath=false', 'status', '--porcelain', '-uall')).out.split('\n').filter((z) => z.length > 3);
+    const weg: string[] = [];
+    for (const z of zeilen) {
+      const x = z[0], y = z[1], f = z.slice(3);
+      if (y === 'M' || y === 'D' || y === 'T') { await git(dir, 'checkout', '--', f); weg.push(f); }
+      else if (x === '?' && !/\.test\.[cm]?[jt]s$/.test(f)) { rmSync(join(dir, f), { force: true }); weg.push(f); }
+    }
+    if (weg.length) gateLog.push(`Prüfer änderte Nicht-Test: ${weg.join(', ')}, verworfen`);
+  }
+  const pruefTests = new Set<string>();
+  /** Prüfschleife am Kandidaten (in dessen Unter-Worktree), danach voller Lauf erneut. Rot/ohne Ergebnis/Deckel → { ok: false }. Setzt k.diff auf den Diff samt Fix und Prüfer-Tests. */
+  async function strangPruefen(k: { bauer: string; diff: string }): Promise<{ ok: boolean; log: string }> {
+    const s = subs.get(k.bauer)!; geschleift.add(k);
+    const pruefer = k.bauer === DEEPSEEK ? FLASH : DEEPSEEK;
+    o.status?.(`⏳ Best-of-N: Strang-Prüfung (${pruefer} prüft ${k.bauer}) …`);
+    const e = await pruefSchleife({
+      pruefen: async (linse) => {
+        const dif = (await diffVon(s.dir, s.base)).slice(0, 60_000);
+        const tests = [...new Set([...dif.matchAll(/^diff --git a\/\S+ b\/(\S+\.test\.[cm]?[jt]s)$/gm)].map((m) => m[1]))];
+        const text = await gedeckelt(s.dir, pruefer, `${linse}\n\n## DoD\n${o.prompt}\n\n## Diff\n${dif}\n\n## Tests im Diff\n${tests.join('\n') || '(keine)'}`);
+        await nurTests(s.dir);
+        const neu = await neueTests(s.dir); neu.forEach((t) => pruefTests.add(t));
+        return { text, tests: neu };
+      },
+      rotAufHead: async (tests) => {
+        const rot: string[] = [], logs: string[] = [];
+        for (const f of tests) { const r = await testLauf(s.dir, f); if (!r.ok) { rot.push(f); logs.push(`${f}\n${r.log.slice(-2000)}`); } }
+        return { rot, log: logs.join('\n---\n') };
+      },
+      fixen: async (fehler) => {
+        const vorher = new Map([...pruefTests].map((t): [string, Buffer | null] => [t, existsSync(join(s.dir, t)) ? readFileSync(join(s.dir, t)) : null]));
+        await gedeckelt(s.dir, k.bauer, `## Fixrunde\nDie Bridge hat Tests des Prüfers auf deinem Stand laufen lassen; diese sind rot. Behebe den Fehler im Produktcode, ändere die Tests nicht.\n\n${BAUER_REGELN}\n\n## DoD\n${o.prompt}\n\n## Rote Tests\n${fehler.slice(-6000)}`);
+        const geaendert = [...vorher].filter(([t, inhalt]) => inhalt && !(existsSync(join(s.dir, t)) && readFileSync(join(s.dir, t)).equals(inhalt)));
+        if (!geaendert.length) return;
+        for (const [t, inhalt] of geaendert) { mkdirSync(dirname(join(s.dir, t)), { recursive: true }); writeFileSync(join(s.dir, t), inhalt!); }
+        gateLog.push(`Fixer änderte Prüfer-Test: ${geaendert.map(([t]) => t).join(', ')}, zurückgesetzt`);
+        return 'manipuliert';
+      },
+    });
+    phasen = e.phasen;
+    gateLog.push(`Strang-Prüfung: ${e.ende}, ${e.runden} Runde(n), rot gesehen: ${e.roteTests.join(', ') || '-'}, offen: ${e.offen.join(', ') || '-'}`);
+    if (e.ende !== 'konvergiert') return { ok: false, log: `Strang-Prüfung ${e.ende}; offen: ${e.offen.join(', ')}` };
+    k.diff = await diffVon(s.dir, s.base);
+    if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
+      const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
+      if (inSchutzzone(namen, env)) { zone = true; gateLog.push('Schutzzone im Diff nach der Strang-Prüfung'); return { ok: false, log: 'Schutzzone im Diff' }; }
+    }
+    const v = await pruefSemaphor.run(() => o.pruefe(s.dir, s.base, 'voll'));
+    gateLog.push(`voll nach Schleife: ${v.ok ? 'grün' : `rot ${v.log.slice(-300)}`}`);
+    return v;
+  }
   const deps: Deps = {
     bauen(bauer, a, op) {
       let fertig = false;
@@ -97,10 +169,20 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       const t = p.ok ? await betroffeneTests(s.dir, k.diff) : { ok: true, log: '' };
       return { tsc: p.tsc ?? p.ok, lint: p.lint ?? p.ok, tests: p.ok && t.ok, log: p.ok ? t.log : p.log };
     },
-    async voll(k) { const s = subs.get(k.bauer)!; return pruefSemaphor.run(() => o.pruefe(s.dir, s.base, 'voll')); },
-    ledger: emittiereLauf,
+    async voll(k) {
+      const s = subs.get(k.bauer)!;
+      const v = await pruefSemaphor.run(() => o.pruefe(s.dir, s.base, 'voll'));
+      return v.ok && schleifeAn ? strangPruefen(k) : v;   // L2: Sieger-Kandidat durch die Prüfschleife; rot → Rangfolge/L3-Kette in rennen()
+    },
+    ledger: schleifeAn ? (e) => { ledgerEvent = e; } : emittiereLauf,
   };
   const lauf = await rennen(deps, { id: o.id, plan: o.prompt, dateien }, { env, stat });
+  // Ein Retry-Sieger (L3c) läuft in rennen() nicht durch voll: hier nachholen; rot → Kette erschöpft → Sonnet.
+  if (schleifeAn && lauf.sieger && !geschleift.has(lauf.sieger) && subs.has(lauf.sieger.bauer)) {
+    const v = await strangPruefen(lauf.sieger).catch((e) => ({ ok: false, log: String(e) }));
+    if (!v.ok) { lauf.logs.push(`${lauf.sieger.bauer}: Strang-Prüfung rot\n${v.log.slice(-1500)}`); lauf.sieger = null; lauf.verlierer = undefined; if (!zone) lauf.weiter = 'sonnet'; if (ledgerEvent) ledgerEvent.sieger = null; }
+  }
+  if (ledgerEvent) emittiereLauf({ ...ledgerEvent, ...(phasen ? { phasen } : {}), gateLog });
   if (o.statistikPfad) statistikSpeichern(o.statistikPfad, stat);
   const patches = Object.fromEntries([...subs.keys()].map((b): [string, string] => [b, '']));
   const sieger = lauf.sieger;
