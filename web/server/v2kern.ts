@@ -1,6 +1,6 @@
 // Werkbank 2.0 (Paket 436): reine Regeln der neuen Oberfläche — welche fünf Dinge oben stehen, wie eine Karte aussieht,
 // der Zustand eines Unter-Chats in einem Satz, „Heute erledigt“ nur mit Fertigem, „wartet auf“ je Person. Ohne Datenbank.
-import { createHash } from 'node:crypto';
+import { safeId } from '../../claude-bridge/src/safeid.ts';
 import { fangHierAn, type Frage } from './entscheidungsseite.ts';
 import { ohneFachwort } from './woerterbuch.ts';
 import { THEMEN, themaOf } from './themen.ts';
@@ -486,26 +486,25 @@ export function strangZuPr(straenge: { _id: string; title?: string; zustand?: st
     .map((s) => ({ id: String(s._id), titel: kurz(String(s.title ?? ''), 120), zustand: zu(s.zustand) }));
 }
 
-/** R12b: Schlüssel eines Strangs in der Brücke (wie `safeId(user) + ':' + conv` dort). */
-export const bruckenSchluessel = (userId: string, conv: string) => `${/^[A-Za-z0-9_-]{1,64}$/.test(userId) ? userId : createHash('sha256').update(userId).digest('hex').slice(0, 24)}:${conv}`;
+/** R12b: Schlüssel eines Strangs in der Brücke — dieselbe `safeId` wie dort (claude-bridge/src/safeid.ts). */
+export const bruckenSchluessel = (userId: string, conv: string) => `${safeId(userId)}:${conv}`;
 
 export interface ProzessZeile { anzahl: number; laengsterMin: number; frist: string | null; ueberfaellig: { beendetInS: number } | null; checkin: string | null }
 /**
  * R12b: die laufenden Prozesse EINES Strangs in einer Zeile. `eintraege` ist die Antwort der Brücke (`/internal/prozesse`);
  * zum Strang gehört `besitzer === schluessel` oder `<schluessel>#…` (nie nur ein gleicher Anfang: `abc2` ≠ `abc`). Keine → null.
- * `gnadeS`: Gnadenfrist des Wächters nach der Frist (Brücke: BRIDGE_WAECHTER_GNADE_S, Vorgabe 60).
  */
-export function prozessZeile(eintraege: any[], schluessel: string, jetzt: number, gnadeS = 60): ProzessZeile | null {
+export function prozessZeile(eintraege: any[], schluessel: string, jetzt: number): ProzessZeile | null {
   const meine = (Array.isArray(eintraege) ? eintraege : []).filter((x) => typeof x?.besitzer === 'string' && (x.besitzer === schluessel || x.besitzer.startsWith(`${schluessel}#`)));
   if (!meine.length) return null;
   const fristen = meine.map((x) => Number(x.fristAt)).filter((n) => Number.isFinite(n) && n > 0);
-  const spaet = meine.filter((x) => x.zustand === 'überfällig' && Number.isFinite(Number(x.fristAt)));
+  const enden = meine.filter((x) => x.zustand === 'überfällig' && typeof x.beendetAt === 'string' && Number.isFinite(Date.parse(x.beendetAt))).map((x) => Date.parse(x.beendetAt));
   const still = meine.find((x) => x.zustand === 'checkin');
   return {
     anzahl: meine.length,
     laengsterMin: Math.round(Math.max(...meine.map((x) => Number(x.laufzeitS) || 0)) / 60),
     frist: fristen.length ? new Date(Math.min(...fristen)).toISOString() : null,
-    ueberfaellig: spaet.length ? { beendetInS: Math.max(0, Math.round((Math.min(...spaet.map((x) => Number(x.fristAt))) + gnadeS * 1000 - jetzt) / 1000)) } : null,
+    ueberfaellig: enden.length ? { beendetInS: Math.max(0, Math.round((Math.min(...enden) - jetzt) / 1000)) } : null,
     checkin: still ? `still seit ${Math.round((Number(still.zuletztAktivS) || 0) / 60)} min` : null,
   };
 }

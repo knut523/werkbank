@@ -632,7 +632,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const kopf: any = doc.berichtKopf ?? null;
     // R12b: die laufenden Prozesse dieses Strangs (eine Abfrage je Aufruf; jeder Fehler → null, die Seite bleibt heil).
     const prozesse = doc.conv ? await fetch(`${d.bridgeUrl}/internal/prozesse?user=${encodeURIComponent(u.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(4000) })
-      .then(async (r) => (r.ok ? prozessZeile(await r.json(), bruckenSchluessel(u.id, String(doc.conv)), Date.now(), Number(process.env.BRIDGE_WAECHTER_GNADE_S) || 60) : null)).catch(() => null) : null;
+      .then(async (r) => (r.ok ? prozessZeile(await r.json(), bruckenSchluessel(u.id, String(doc.conv)), Date.now()) : null)).catch(() => null) : null;
     const auftrag = String(doc.zielLine || String(doc.prompt ?? '').split('\n').map((l: string) => l.replace(/^[#>*\s-]+/, '').trim()).find((l: string) => l.length > 15) || doc.title || '');
     const gh: any[] = Array.isArray(kopf?.github) ? kopf.github : [];
     const steckbrief = {
