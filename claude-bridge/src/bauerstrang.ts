@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { tamperGruende, mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
 import { budgetGrund } from './kapazitaet.ts';
 import { pruefSchleife, BAUER_REGELN, type Phase } from './strangpruefung.ts';
 import { FLASH, DEEPSEEK } from './modellwahl.ts';
@@ -124,6 +124,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   /** Prüfschleife am Kandidaten (in dessen Unter-Worktree), danach voller Lauf erneut. Rot/ohne Ergebnis/Deckel → { ok: false }. Setzt k.diff auf den Diff samt Fix und Prüfer-Tests. */
   async function strangPruefen(k: { bauer: string; diff: string }): Promise<{ ok: boolean; log: string }> {
     const s = subs.get(k.bauer)!; geschleift.add(k);
+    await git(s.dir, 'add', '-A'); const baumBauer = (await git(s.dir, 'write-tree')).out.trim();   // Stand des Bauers, gegen den der Fixer gemessen wird
     const pruefer = k.bauer === DEEPSEEK ? FLASH : DEEPSEEK;
     o.status?.(`⏳ Best-of-N: Strang-Prüfung (${pruefer} prüft ${k.bauer}) …`);
     const e = await pruefSchleife({
@@ -154,6 +155,9 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     gateLog.push(`Strang-Prüfung: ${e.ende}, ${e.runden} Runde(n), rot gesehen: ${e.roteTests.join(', ') || '-'}, offen: ${e.offen.join(', ') || '-'}`);
     if (e.ende !== 'konvergiert') return { ok: false, log: `Strang-Prüfung ${e.ende}; offen: ${e.offen.join(', ')}` };
     k.diff = await diffVon(s.dir, s.base);
+    // Tamper-Guard auch am Endstand: der Fixer darf bestehende Repo-Tests und die Tests des Bauers weder löschen noch schwächen (gegen base UND gegen den Bauer-Stand).
+    const tamper = [...new Set([...tamperGruende(k.diff), ...tamperGruende(await diffVon(s.dir, baumBauer))])];
+    if (tamper.length) { gateLog.push(`Tamper-Guard nach der Strang-Prüfung: ${tamper.slice(0, 3).join('; ')}`); return { ok: false, log: `Tamper-Guard: ${tamper.slice(0, 3).join('; ')}` }; }
     if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
       const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
       if (inSchutzzone(namen, env)) { zone = true; gateLog.push('Schutzzone im Diff nach der Strang-Prüfung'); return { ok: false, log: 'Schutzzone im Diff' }; }

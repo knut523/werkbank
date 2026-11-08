@@ -331,3 +331,38 @@ test('Fix 1 (Ende zu Ende): beide Bauer benennen den Test aus dem Muster → kei
     assert.equal(existsSync(join(cwd, 'src/b.test.ts')), true, 'Test im Strang unberührt'); assert.equal(existsSync(join(cwd, 'src/b.ts')), false);
   } finally { rmSync(wurzel, { recursive: true, force: true }); }
 });
+
+/** Zug wie l2Zug (DeepSeek baut klein, Prüfer schreibt roten Test), aber der Fixer richtet zusätzlich `fixerTut` an. */
+function fixerZug(fixerTut: (dir: string) => void, builderTut: (dir: string) => void = () => {}) {
+  return async (dir: string, m: string, prompt: string) => {
+    const a = join(dir, 'src/a.ts');
+    if (prompt.startsWith('Linse')) {
+      const fehlt = !readFileSync(a, 'utf8').includes('// fix');
+      if (fehlt && prompt.startsWith('Linse Logik')) writeFileSync(join(dir, 'src/pruef.test.ts'), PRUEFTEST);
+      return { ok: true, text: fehlt && prompt.startsWith('Linse Logik') ? 'ERGEBNIS: 1 rote Tests' : 'ERGEBNIS: keine Befunde', grund: '' };
+    }
+    if (prompt.startsWith('## Fixrunde')) { writeFileSync(a, readFileSync(a, 'utf8') + '// fix\n'); fixerTut(dir); return { ok: true, text: 'gefixt', grund: '' }; }
+    writeFileSync(a, zeilen(m === DEEPSEEK ? 2 : 6)); builderTut(dir); return { ok: true, text: `fertig ${m}`, grund: '' };
+  };
+}
+const zeileWeg = (datei: string, muster: RegExp) => (dir: string) => { const f = join(dir, datei); writeFileSync(f, readFileSync(f, 'utf8').split('\n').filter((z) => !muster.test(z)).join('\n')); };
+
+test('Fix 2: Fixer löscht Assertion in bestehendem Repo-Test → nicht ok, Grund im gateLog, nichts angewendet', async () => {
+  const { wurzel, cwd } = repoMitTests(); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx2a', prompt: 'ändere src/a.ts', env: {}, zug: fixerZug(zeileWeg('src/alt.test.ts', /assert\.equal\(2, 2\)/)), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+    assert.ok(ev.find((x) => x.id === 'fx2a').gateLog.some((l: string) => /Tamper-Guard nach der Strang-Prüfung.*alt\.test\.ts/.test(l)), JSON.stringify(ev.find((x) => x.id === 'fx2a')?.gateLog));
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 2: Fixer schwächt den EIGENEN neuen Test des Bauers → nicht ok, Grund im gateLog', async () => {
+  const { wurzel, cwd } = repoMitTests(); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  const neuerTest = (dir: string) => writeFileSync(join(dir, 'src/neu.test.ts'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('neu', () => {\n  assert.equal(1, 1);\n  assert.equal(2, 2);\n});\n");
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx2b', prompt: 'ändere src/a.ts', env: {}, zug: fixerZug(zeileWeg('src/neu.test.ts', /assert\.equal\(2, 2\)/), neuerTest), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.ok(ev.find((x) => x.id === 'fx2b').gateLog.some((l: string) => /Tamper-Guard nach der Strang-Prüfung.*neu\.test\.ts/.test(l)), JSON.stringify(ev.find((x) => x.id === 'fx2b')?.gateLog));
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
