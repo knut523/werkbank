@@ -404,7 +404,7 @@ type QueryFn = (p: { prompt: string; options: Record<string, any> }) => AsyncIte
  * Testet ein Konto mit einem Minimalzug (ein Modellaufruf, keine Werkzeuge, keine MCP-Server) in der Konfiguration der
  * Person. Ergebnis ohne Inhalte: ok, oder die Fehlerart (rate_limit mit Reset, auth, failed).
  */
-export async function testAccount(query: QueryFn, p: { token: string; cwd: string; home: ClaudeHome; melious?: boolean; model?: string }): Promise<{ ok: boolean; error?: 'rate_limit' | 'auth' | 'failed' | 'guthaben'; resetsAt?: number; usage?: MeliousUsage }> {
+export async function testAccount(query: QueryFn, p: { token: string; cwd: string; home: ClaudeHome; melious?: boolean; model?: string; probe?: boolean }): Promise<{ ok: boolean; error?: 'rate_limit' | 'auth' | 'failed' | 'guthaben'; resetsAt?: number; usage?: MeliousUsage }> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 60_000);
   const env = cleanEnv(p.token);
@@ -415,6 +415,7 @@ export async function testAccount(query: QueryFn, p: { token: string; cwd: strin
   };
   applyHome(p.home, env, options);
   if (p.melious && p.model) options.model = p.model;
+  if (p.probe && !p.melious) options.model = 'haiku';   // Probe-Aufruf (claudebudget.ts): kleinstes Modell
   let reset: number | undefined;
   let error: 'rate_limit' | 'auth' | 'failed' | 'guthaben' | undefined;
   let ok = false;

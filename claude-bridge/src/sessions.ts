@@ -23,6 +23,9 @@ import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
+import { testAccount } from './accounts.ts';
+const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK === 'true';
+import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
 import { bauZug, linksNachDraussen, urteilAus, verifiziererPrompt, MAX_RUNDEN, type BauDeps, type Verdikt } from './oc2strang.ts';
@@ -223,6 +226,7 @@ let cwdMap: Record<string, string> = {};
 try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
 // Audit 05.11. (3): die Warteschlange auf Platte — nach einem Neustart bekommt ein Zug, der wiederkommt, seinen Platz zurück.
 merkeIn(join(cfg.stateDir, 'schlange.json'));
+budgetMerkeIn(join(cfg.stateDir, 'claudebudget.json'));
 
 // Orchestrator-Stränge (Knut, 09.10.2026): Unterhaltung → Arbeitsordner, Anmeldezeit und Ausgang des letzten Zuges.
 // Angemeldet über den internen Kanal VOR dem ersten Zug (die Web-App wählt die Unterhaltungs-ID); dauerhaft.
@@ -1503,6 +1507,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Pass B (07.11.): „neu“ = noch kein Zug (sessionMap leert sich bei jcode und Phasenwechsel); Kontingent nur für Stränge auf Claude.
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
+    rolle: rolleVon({ leit: kind === 'leitstand', phase: orchMap[key]?.phase, profil: orchMap[key]?.profil }), rang: 1, modell: orchMap[key]?.phase ? phaseModell(orchMap[key]!.phase!).modell : undefined,
+    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft,
     claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber' };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
@@ -1759,7 +1765,18 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Knut 15.10. (550 000 Energie, 16 Stränge auf glm-5.3): ist Claude leer, bekommt NUR der Hauptchat das große Ketten-Modell
   // (mit Warnung); Unter-Stränge laufen dann auf dem kleinen Modell (glm-5.3-flash), nicht auf dem Lead-Modell.
   const ketteModellFuer = live.leit ? undefined : KETTE_STRANG_MODELL;
-  const plan = (kette: boolean) => planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, ketteModell: ketteModellFuer, sonnetStufe: !/^(sonnet|haiku)$/.test(String(strandClaude ?? req.model ?? '')) });
+  const budgetModell = () => String(strandClaude ?? req.model ?? 'sonnet');
+  // Claude-Budget (claudebudget.ts): die Claude-Konten eines Zugs nach Luft ordnen (Eimer + beide Grenzen); heiße Konten fallen heraus.
+  const budgetReihe = (q: Account[]): Account[] => {
+    if (!budgetAn()) return q;
+    const von = q.findIndex((a) => !isMelious(a) && !a.chainModel);
+    if (von < 0) return q;
+    let bis = von; while (bis < q.length && !isMelious(q[bis]) && !q[bis].chainModel) bis++;
+    const e = orchMap[key];
+    const bev = rolleVon({ leit: live.leit, phase: e?.phase, profil: e?.profil }) === 'endpruefung' ? endpruefungKontoFuer(e?.parent ?? key, key, Date.now()) : null;
+    return [...q.slice(0, von), ...budgetOrdnen(q.slice(von, bis), { rang: 1, modell: budgetModell(), bevorzugt: bev, now: Date.now() }), ...q.slice(bis)];
+  };
+  const plan = (kette: boolean) => budgetReihe(planQueue(accounts, exhaustedOf(user), { conv: key, chatOn, overflow: risiko === 'niedrig', kette, ketteModell: ketteModellFuer, sonnetStufe: !/^(sonnet|haiku)$/.test(String(strandClaude ?? req.model ?? '')) }));
   const leadQueue = () => plan(ketteMit(accounts.find(isMelious)));
   // Worker (Plan 165, C7): zuerst Melious, solange der Rest über der Reserve für die Lead-Ersatzkette liegt; Claude nur Haiku/Sonnet,
   // höchstens workerClaudeMax() gleichzeitig je Person und gar nicht, sobald ein Claude-Konto erschöpft ist. Keine Ersatzkette.
@@ -1774,6 +1791,13 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const cq = claudeOk ? planQueue(claudeAll, ex, { conv: key, chatOn: false, overflow: false }).map((a) => ({ ...a, chainModel: e.workerClaude ?? 'haiku' })) : [];
     return [...(melOk ? [melAcc!] : []), ...cq];
   };
+  if (budgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
+  setzeMelious(!!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));
+  // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
+  if (budgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
+    const a = accounts.find((x) => x.id === id);
+    return !!a && (await testAccount(req.query as any, { token: a.token, cwd: scratch, home, probe: true })).ok;
+  }).catch(() => {});
   let queue = live.worker ? workerQueue() : leadQueue();
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
@@ -1786,6 +1810,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return;
   }
   let acct: Account = queue[0];
+  // Hauptchat wird nie eingereiht: bei verbrauchtem Tagesbudget nur ein Hinweis-Ereignis.
+  if (live.leit) { const h = claudeBudgetGrund({ rolle: 'hauptchat' }); if (h) emitStatus(live, `ℹ️ ${h.replace(/^wartet: /, '')} — dieser Zug läuft trotzdem (der Hauptchat wartet nie).`); }
   live.onClaude = live.worker && !isMelious(acct);
   accountEnv(env, acct);
   if (chatOn && !isMelious(acct)) {
@@ -1959,6 +1985,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
         if (providerMap.size > 5000) providerMap.delete(providerMap.keys().next().value!);
         const u0 = { ...live.usage }, a0 = Date.now();
         lastRead = (await attempt(prompt)) ?? [];
+        if (!isMelious(acct)) zugGelaufen({ konto: acct.id, modell: String(live.modelSeen ?? options.model ?? 'sonnet'), tokens: (live.usage.input - u0.input) - ((live.usage.cacheRead ?? 0) - (u0.cacheRead ?? 0)) + (live.usage.output - u0.output), hauptchat: live.leit, now: Date.now() });
         // Tatsächlich gelaufenes Modell (S4): aus der ersten Antwort, sonst das bestellte; im Zustand des Strangs für den Kopf.
         const modell = `${isMelious(acct) ? 'Melious' : 'Claude'} ${live.modelSeen ?? options.model ?? 'Standard'}`;
         if ((live.orch || live.leit) && orchMap[key]?.turn) setTurn(key, { ...orchMap[key].turn!, modell });

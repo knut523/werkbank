@@ -20,7 +20,7 @@ const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/
  * Rein: warum ein Strang-Zug (noch) nicht starten darf, oder '' wenn er darf. `neu` = erster Zug des Strangs (nur dann zählt der
  * PR-Stau — ein laufender Strang soll seinen PR fertig machen können); `bauend` = Profil voll/bauer/release (GLM-Bauer brauchen Energie).
  */
-export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean; rolle?: string }, env: Record<string, string | undefined> = process.env): string {
+export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean } & Parameters<typeof claudeBudgetGrund>[0], env: Record<string, string | undefined> = process.env): string {
   if (!k || !kapazitaetAn(env)) return '';
   if (k.claudeFrei === false && o.claude !== false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
   const cb = claudeBudgetGrund(o, Date.now(), env); if (cb && o.claude !== false) return cb;

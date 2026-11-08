@@ -8,6 +8,7 @@ const num = (v: unknown, d: number) => { const n = Number(v); return v !== undef
 const zahl = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const ms = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? (n < 1e12 ? n * 1000 : n) : null; };
 const H = 3_600_000;
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 
 export interface KontoLage { id: string; status: 'ok' | 'unbekannt'; fuenfH: number | null; siebenT: number | null; vorPlan: boolean; resetFuenfH: number | null; resetWoche: number | null }
 
@@ -37,9 +38,9 @@ const eimer = new Map<string, Eimer>();
 /**
  * Budget in Wochen-Prozentpunkten: Eimer mit Burst-Deckel (Vorgabe 18 %), Nachladung = Rest-Woche / Resthorizont je Stunde
  * (vor Plan: keine Nachladung). Kurz vor dem Wochenreset (≤ ausschoepfH) fällt der Deckel auf die ganze Rest-Woche —
- * ungenutztes Limit verfällt; Rest > 90 % gilt dann als „hoch“.
+ * ungenutztes Limit verfällt.
  */
-export function budgetStand(l: KontoLage, now: number, o?: Opt): { level: number; cap: number; ratePerH: number; hoch: boolean; ausschoepfen: boolean } {
+export function budgetStand(l: KontoLage, now: number, o?: Opt): { level: number; cap: number; ratePerH: number; ausschoepfen: boolean } {
   const c = opt(o);
   const rest = l.siebenT === null ? 0 : Math.max(0, 100 - l.siebenT);
   const horizont = l.resetWoche && l.resetWoche > now ? Math.max(1, (l.resetWoche - now) / H) : 168;
@@ -49,9 +50,9 @@ export function budgetStand(l: KontoLage, now: number, o?: Opt): { level: number
   const e = eimer.get(l.id);
   const level = Math.min(cap, e ? e.stand + ratePerH * Math.max(0, now - e.at) / H : cap);
   eimer.set(l.id, { stand: level, at: now });
-  return { level, cap, ratePerH, hoch: ausschoepfen && rest > 90, ausschoepfen };
+  return { level, cap, ratePerH, ausschoepfen };
 }
-export function entnehmen(id: string, punkte: number, now: number) { const e = eimer.get(id); if (e) eimer.set(id, { stand: Math.max(0, e.stand - punkte), at: now }); }
+export function entnehmen(id: string, punkte: number, now: number) { const e = eimer.get(id); if (e) { eimer.set(id, { stand: Math.max(0, e.stand - punkte), at: now }); speichern(); } }
 
 /** Luft eines Kontos in Prozentpunkten und welche Grenze zuerst bricht: 5h-Wand, Wochen-Rest oder Tempo (Eimer). */
 export function grenzen(l: KontoLage, now: number, o?: Opt, rang0 = false): { luft: number; bindend: '5h' | 'woche' | 'tempo' | 'unbekannt' } {
@@ -72,17 +73,50 @@ export async function probeKonto(id: string, fn: () => Promise<boolean>, now: nu
   if (z.frei) return 'frei';
   if (now < z.bis) return z.fehler >= BREAKER_FEHLER ? 'offen' : 'wartet';
   const ok = await fn().catch(() => false);
-  if (ok) { probeZ.set(id, { frei: true, fehler: 0, bis: 0 }); return 'frei'; }
+  if (ok) { probeZ.set(id, { frei: true, fehler: 0, bis: 0 }); speichern(); return 'frei'; }
   const fehler = z.fehler + 1;
-  probeZ.set(id, { frei: false, fehler, bis: now + Math.min(60 * 60_000, 60_000 * 2 ** (fehler - 1)) });
+  probeZ.set(id, { frei: false, fehler, bis: now + Math.min(60 * 60_000, 60_000 * 2 ** (fehler - 1)) }); speichern();
   return fehler >= BREAKER_FEHLER ? 'offen' : 'wartet';
 }
-export const probeWiderrufen = (id: string) => { probeZ.delete(id); };
+export const probeWiderrufen = (id: string) => { probeZ.delete(id); speichern(); };
 
 // ---------- Zustand aus cswap, Einhängepunkte ----------
 const lagen = new Map<string, KontoLage>();
 /** Von auslastung() nach jedem Lesen aufgerufen. */
-export function aktualisiere(d: any, karte = kontoKarte()) { if (!budgetAn()) return; for (const l of kontenLage(d, karte)) lagen.set(l.id, l); }
+export function aktualisiere(d: any, karte = kontoKarte()) {
+  if (!budgetAn()) return;
+  for (const l of kontenLage(d, karte)) {
+    const vor = letztWoche.get(l.id);
+    if (l.siebenT !== null) {
+      // Wochen-Prozent gestiegen: die seit der letzten Messung gezählten Tokens (ein Modell) gegen Δ% kalibrieren.
+      const sm = sammler.get(l.id);
+      if (vor !== undefined && l.siebenT > vor && sm) {
+        const ms = Object.entries(sm);
+        if (ms.length === 1) zugNotieren({ modell: ms[0][0], tokens: ms[0][1], deltaPct: l.siebenT - vor });
+      }
+      if (vor === undefined || l.siebenT !== vor) { sammler.delete(l.id); letztWoche.set(l.id, l.siebenT); }
+    }
+    lagen.set(l.id, l);
+  }
+}
+const sammler = new Map<string, Record<string, number>>();   // Konto → Modell → Tokens seit der letzten %-Änderung
+const letztWoche = new Map<string, number>();
+/** Tokens eines Zugs (ohne Cache-Lesen) für Kalibrierung vormerken; bucht die geschätzte Last aus dem Eimer. Rückgabe: geschätzte %-Punkte. */
+export function zugGelaufen(o: { konto: string; modell: string; tokens: number; hauptchat?: boolean; now: number }): number {
+  if (!budgetAn() || !(o.tokens > 0)) return 0;
+  const m = grundModell(o.modell);
+  const sm = sammler.get(o.konto) ?? {}; sm[m] = (sm[m] ?? 0) + o.tokens; sammler.set(o.konto, sm);
+  const pkt = kostenPunkte(o.modell, o.tokens);
+  entnehmen(o.konto, pkt, o.now);
+  if (o.hauptchat) hauptchatBuchen(pkt, o.now);
+  return pkt;
+}
+/** Geschätzte Wochen-%-Punkte: kalibrierter Median, sonst BRIDGE_CLAUDE_PCT_JE_1M (Vorgabe 2, Opus ×3 wenn unkalibriert). */
+export function kostenPunkte(modell: string, tokens: number, env: Record<string, string | undefined> = process.env): number {
+  const k = kalibriere()[grundModell(modell)];
+  const vorgabe = num(env.BRIDGE_CLAUDE_PCT_JE_1M, 2) * (grundModell(modell) === 'opus' ? 3 : 1);
+  return (k?.pctJe1M ?? vorgabe) * (tokens / 1e6);
+}
 export const lageVon = (id: string) => lagen.get(id) ?? null;
 /** Darf das Konto in die Warteschlange? Unbekannte Konten erst nach erfolgreicher Probe; nicht registrierte immer. */
 export function kontoFrei(id: string): boolean {
@@ -92,10 +126,10 @@ export function kontoFrei(id: string): boolean {
 }
 /** Reset aus einem rate_limit-Zug ins Konto-Ledger (Wochen-/Fensterreset je Konto, Council Punkt 5). */
 const resets = new Map<string, number>();
-export const resetNotieren = (id: string, until: number) => { resets.set(id, until); };
+export const resetNotieren = (id: string, until: number) => { resets.set(id, until); speichern(); };
 export const resetVon = (id: string) => resets.get(id) ?? null;
 /** Nur für Tests. */
-export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); };
+export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); datei = null; };
 
 // ---------- 5. alle Konten heiß ----------
 export type Verteilung =
@@ -139,7 +173,7 @@ export function endpruefungPlanen(ereignisse: { id: string; items: { id: string;
     if (!items.length) return { ereignis: e.id, items, konto: null, zurueck, reservierung: 0 };
     const res = o.kosten(items.length);
     const ok = konten.filter((k) => k.status === 'ok' && kontoFrei(k.id));
-    const gut = ok.filter((k) => (k.siebenT ?? 100) < 85 && luft(k) >= res).sort((a, b) => luft(b) - luft(a));
+    const gut = ok.filter((k) => (k.siebenT ?? 100) < 85 && luft(k) >= res).sort((a, b) => luft(b) - luft(a) || (a.siebenT ?? 100) - (b.siebenT ?? 100));
     const konto = gut[0] ?? [...ok].sort((a, b) => (a.siebenT ?? 100) - (b.siebenT ?? 100))[0] ?? null;
     if (konto) abzug.set(konto.id, (abzug.get(konto.id) ?? 0) + res);
     return { ereignis: e.id, items, konto: konto?.id ?? null, zurueck, reservierung: res };
@@ -156,6 +190,7 @@ export function zugNotieren(z: Zug & { konto?: string; now?: number }) {
   zuege.push({ modell: grundModell(z.modell), tokens: z.tokens, deltaPct: z.deltaPct });
   if (zuege.length > 2000) zuege.shift();
   if (z.konto) entnehmen(z.konto, z.deltaPct, z.now ?? Date.now());
+  speichern();
 }
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 /** % je 1 Mio. Tokens je Modell (Opus/Sonnet getrennt): Median der Einzelzüge. */
@@ -176,12 +211,96 @@ export function reservierung(modell: string, tokens: number, kal: ReturnType<typ
 const tag = new Map<string, number>();
 const tagKey = (now: number) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(now);
 export const hauptchatTagesBudget = (env: Record<string, string | undefined> = process.env) => num(env.BRIDGE_HAUPTCHAT_TAGES_PCT, 10);
-export function hauptchatBuchen(punkte: number, now: number) { const k = tagKey(now); tag.set(k, (tag.get(k) ?? 0) + Math.max(0, punkte)); for (const x of tag.keys()) if (x !== k) tag.delete(x); }
+export function hauptchatBuchen(punkte: number, now: number) { const k = tagKey(now); tag.set(k, (tag.get(k) ?? 0) + Math.max(0, punkte)); for (const x of [...tag.keys()]) if (x !== k) tag.delete(x); speichern(); }
 export const hauptchatRest = (now: number, env: Record<string, string | undefined> = process.env) => Math.max(0, hauptchatTagesBudget(env) - (tag.get(tagKey(now)) ?? 0));
 
-/** Einhängepunkt für kapazitaetGrund: '' = darf. Nur der Hauptchat ist am Tagesbudget gebunden. */
-export function claudeBudgetGrund(o: { rolle?: string }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
+// ---------- Einhängepunkte in die Laufzeit ----------
+/** Rolle des Zugs aus Strang-Zustand: Hauptchat, Phase push = Opus-Endprüfung, review = Prüfer, Worker-Rolle, Profil leser, sonst Bauer. */
+export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; phase?: string; profil?: string }): 'hauptchat' | 'bauer' | 'pruefer' | 'leser' | 'endpruefung' {
+  if (o.leit) return 'hauptchat';
+  if (o.worker) return o.rolle === 'pruefer' ? 'pruefer' : o.rolle === 'leser' || o.rolle === 'schreiber' ? 'leser' : 'bauer';
+  if (o.phase === 'push') return 'endpruefung';
+  if (o.phase === 'review') return 'pruefer';
+  return o.profil === 'leser' ? 'leser' : 'bauer';
+}
+let meliousFrei = false;
+/** Von sessions.ts gesetzt, wenn Melious für die Person nutzbar ist (Ausweg bei heißen Claude-Konten). */
+export const setzeMelious = (frei: boolean) => { meliousFrei = frei; };
+
+/** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
+export function budgetOrdnen<T extends { id: string; kind?: string }>(queue: T[], o: { rang: number; modell: string; bevorzugt?: string | null; now: number }): T[] {
+  if (!budgetAn() || queue.length < 2) return queue;
+  const kosten = Math.max(1, kostenPunkte(o.modell, 5e5));
+  const bewertet = queue.map((a, i) => { const l = a.kind === 'melious' ? null : lagen.get(a.id); return { a, i, l, g: l ? grenzen(l, o.now, undefined, o.rang === 0) : null }; });
+  if (!bewertet.some((x) => x.g)) return queue;
+  const ok = bewertet.filter((x) => !x.g || x.g.luft >= kosten);
+  const rest = ok.length ? ok : bewertet;
+  return rest.sort((x, y) => Number(y.a.id === o.bevorzugt) - Number(x.a.id === o.bevorzugt) || (y.g ? y.g.luft : -1) - (x.g ? x.g.luft : -1) || x.i - y.i).map((x) => x.a);
+}
+
+// Endprüfungen sammeln (Council: vor der Push-Welle bündeln): je Ereignis ein Fenster ab der ersten Anmeldung.
+const fenster = new Map<string, { first: number; items: Map<string, boolean> }>();
+const fensterMs = (env: Record<string, string | undefined> = process.env) => num(env.BRIDGE_ENDPRUEF_FENSTER_MIN, 10) * 60_000;
+const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(t);
+/** Konto, das der Plan für dieses Item vorsieht (nach Ablauf des Fensters), sonst null. */
+export function endpruefungKontoFuer(ereignis: string, item: string, now: number): string | null {
+  const f = fenster.get(ereignis);
+  if (!f) return null;
+  const plan = endpruefungPlanen([{ id: ereignis, items: [...f.items].map(([id, sonnetOk]) => ({ id, sonnetOk })) }], [...lagen.values()], { now, kosten: (n) => Math.max(1, kostenPunkte('opus', n * 3e5)) })[0];
+  return plan.items.includes(item) ? plan.konto : null;
+}
+
+function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now: number, env: Record<string, string | undefined>): string {
+  if (o.rolle === 'endpruefung') {
+    if (o.vorgeprueft === false) return 'wartet: Endprüfung — erst die Sonnet-Vorprüfung, sonst frisst das Sicherheitsnetz das Limit';
+    const e = o.ereignis ?? o.item ?? '', it = o.item ?? e;
+    const f = fenster.get(e) ?? { first: now, items: new Map<string, boolean>() };
+    f.items.set(it, true); fenster.set(e, f);
+    if (now < f.first + fensterMs(env)) return `wartet: Endprüfung gebündelt vor der Push-Welle — startet ab ${uhr(f.first + fensterMs(env))}`;
+  }
+  const konten = [...lagen.values()];
+  if (!konten.length) return '';
+  const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: meliousFrei ? { modell: 'melious' } : null, now });
+  return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
+}
+
+/**
+ * Einhängepunkt für kapazitaetGrund (Strang: wartet in der Schlange) und sessions.ts (Hauptchat: nur Hinweis, nie Schlange).
+ * '' = darf. rang kommt später aus Paket D (Vorgabe 1).
+ */
+export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
   if (!budgetAn(env)) return '';
-  if (o.rolle === 'hauptchat' && hauptchatRest(now, env) <= 0) return `wartet: Tagesbudget — Hauptchat hat seine ${hauptchatTagesBudget(env)} % Wochenanteil für heute verbraucht (morgen wieder)`;
-  return '';
+  if (o.rolle === 'hauptchat') return hauptchatRest(now, env) <= 0 ? `wartet: Tagesbudget — Hauptchat hat seine ${hauptchatTagesBudget(env)} % Wochenanteil für heute verbraucht (morgen wieder)` : '';
+  return wartenGrund(o, now, env);
+}
+
+/** Unbekannte Konten (ohne Usage) probieren: beim ersten Sehen sofort, danach höchstens alle 30 min; Ergebnis über kontoFrei. */
+const probeLetzt = new Map<string, number>();
+export function probeUnbekannte(ids: string[], fn: (id: string) => Promise<boolean>, now = Date.now()): Promise<unknown> {
+  if (!budgetAn()) return Promise.resolve();
+  return Promise.all(ids.filter((id) => lagen.get(id)?.status === 'unbekannt' && !kontoFrei(id) && now - (probeLetzt.get(id) ?? -Infinity) >= 30 * 60_000)
+    .map((id) => { probeLetzt.set(id, now); return probeKonto(id, () => fn(id), now); }));
+}
+
+// ---------- 6. Zustand atomar neben schlange.json (Muster schlange.ts) ----------
+let datei: string | null = null;
+function speichern(): void {
+  if (!datei) return;
+  try {
+    writeFileSync(datei + '.tmp', JSON.stringify({ zuege: zuege.slice(-500), probe: [...probeZ], tag: [...tag], resets: [...resets], eimer: [...eimer] }));
+    renameSync(datei + '.tmp', datei);
+  } catch { /* Platte voll o. ä.: der Zustand im Speicher läuft weiter */ }
+}
+/** Zustand auf Platte halten (null = aus, Tests); liest, was ein voriger Prozess hinterließ. */
+export function budgetMerkeIn(pfad: string | null): void {
+  datei = pfad;
+  if (!pfad) return;
+  try {
+    const j = JSON.parse(readFileSync(pfad, 'utf8'));
+    for (const z of j.zuege ?? []) if (typeof z?.modell === 'string' && z.tokens > 0 && z.deltaPct >= 0) zuege.push({ modell: z.modell, tokens: z.tokens, deltaPct: z.deltaPct });
+    for (const [k, v] of j.probe ?? []) if (typeof k === 'string' && v && typeof v.fehler === 'number') probeZ.set(k, { frei: v.frei === true, fehler: v.fehler, bis: Number(v.bis) || 0 });
+    for (const [k, v] of j.tag ?? []) if (typeof k === 'string' && Number.isFinite(v)) tag.set(k, v);
+    for (const [k, v] of j.resets ?? []) if (typeof k === 'string' && Number.isFinite(v)) resets.set(k, v);
+    for (const [k, v] of j.eimer ?? []) if (typeof k === 'string' && Number.isFinite(v?.stand)) eimer.set(k, { stand: v.stand, at: Number(v.at) || Date.now() });
+  } catch { /* keine oder kaputte Datei: leer anfangen */ }
 }
