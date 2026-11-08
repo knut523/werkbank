@@ -63,6 +63,18 @@ test('Großer Sieger-Diff (> 20 KB) landet vollständig im Strang-Worktree', asy
   rmSync(wurzel, { recursive: true, force: true });
 });
 
+test('Sieger-Diff jenseits 4 MB: run() kürzt auf die letzten 2 MB → Diff landet unvollständig (ok:false) statt im Strang-Worktree', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  // ~5,4 MB Datei: der Diff überschreitet die Innengrenze von run() (delegation.ts: > 4 MB → slice(-2 MB)).
+  const gross = `export const a = 0;\n${Array.from({ length: 6000 }, (_, i) => `// z${i} ${'x'.repeat(900)}\n`).join('')}`;
+  const riesigerZug = async (dir: string, m: string) => { gebaut.push(m); writeFileSync(join(dir, 'src/a.ts'), gross); return { ok: true, text: `fertig ${m}`, grund: '' }; };
+  try {
+    const r = await bestofnStrang({ cwd, id: 'x9', prompt: 'ändere src/a.ts', env: {}, zug: riesigerZug, pruefe });
+    assert.equal(r?.ok, true, 'Sieger-Diff > 4 MB muss anwendbar bleiben (max: 50_000_000 greift nicht, run() kürzt bei 4 MB)');
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), gross, 'Sieger-Diff > 4 MB vollständig im Strang-Worktree');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
 test('Sonnet-Klasse im Strang: Sonnetzone → ok:false mit Sonnet-Grund, kein Bauer gebaut; meliousLeer (userId) ebenso; Abschaltung', async () => {
   const { wurzel, cwd } = repo(); gebaut.length = 0;
   const z = await bestofnStrang({ cwd, id: 'x5', prompt: 'ändere src/kapazitaet.ts', env: {}, zug: zug({}), pruefe });
