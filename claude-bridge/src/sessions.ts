@@ -1557,6 +1557,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
     ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
+  // Melious-Lage je Person VOR der Zulassung schreiben (Gegenprüfung 19: die Setzung beim Zug-Start unten kam zu spät — der
+  // erste Zug las „Melious nicht frei“ und blieb in der Schlange hängen). Der Zug unten schreibt sie mit frischen Konten erneut.
+  if (req.accounts) await req.accounts().then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); setzeMelious(req.userId, !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now())); } }).catch(() => {});
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1852,7 +1855,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return [...(melOk ? [melAcc!] : []), ...cq];
   };
   if (claudeBudgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
-  setzeMelious(safeId(req.userId), !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));
+  setzeMelious(req.userId, !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));   // roher Wert: setzeMelious bildet safeId selbst
   // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
   if (claudeBudgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
     const a = accounts.find((x) => x.id === id);

@@ -225,8 +225,8 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
 }
 const meliousFrei = new Map<string, boolean>();
 const safeId = (s: string) => /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);   // wie sessions.ts; nur Schlüssel der Melious-Map, keine Töpfe
-/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Alter Aufruf ohne userId (boolean) gilt prozessweit weiter; eine Person ohne eigenen Eintrag fällt ebenfalls darauf zurück. */
-export const setzeMelious = (userId: string | boolean, frei?: boolean) => { meliousFrei.set(typeof userId === 'boolean' ? '' : userId, typeof userId === 'boolean' ? userId : frei === true); };
+/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Die Setzung gilt unter der rohen UND der gehashten Kennung (safeId): der Leser bildet safeId(o.userId), der Aufrufer darf roh übergeben. Eine Person ohne eigenen Eintrag fällt auf die prozessweite Setzung (boolean) zurück; steht auch die nicht, gilt Melious als frei (erster Zug nach dem Start, frischer Prozess). Ohne userId bleibt der Default „nicht frei“ (altes Verhalten). */
+export const setzeMelious = (userId: string | boolean, frei?: boolean) => { if (typeof userId === 'boolean') { meliousFrei.set('', userId); return; } const f = frei === true; meliousFrei.set(userId, f); meliousFrei.set(safeId(userId), f); };
 
 /** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
 export function budgetOrdnen<T extends { id: string; kind?: string }>(queue: T[], o: { rang: number; modell: string; bevorzugt?: string | null; now: number }): T[] {
@@ -261,7 +261,8 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
   }
   const konten = [...lagen.values()];
   if (!konten.length) return '';
-  const melOk = ((o.userId !== undefined ? (meliousFrei.get(safeId(o.userId)) ?? meliousFrei.get('')) : meliousFrei.get('')) ?? false) === true;
+  // Eigenen Eintrag der Person lesen (gehasht oder roh gesetzt); ohne eigenen Eintrag den prozessweiten Wert, sonst aus.
+  const melOk = ((o.userId !== undefined ? (meliousFrei.get(safeId(o.userId)) ?? meliousFrei.get(o.userId)) : undefined) ?? meliousFrei.get('') ?? false) === true;
   const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: melOk ? { modell: 'melious' } : null, now });
   return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
 }
