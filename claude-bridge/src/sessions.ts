@@ -1044,10 +1044,11 @@ function handleMessage(live: Live, msg: any) {
           if (block.name === INBOX_TOOL && !msg.parent_tool_use_id) live.inboxCalls.add(block.id);
           if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
-        } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
-          live.progressed = true;
+        } else if (block.type === 'text' && !msg.parent_tool_use_id && !msg.error) {
+          // Die Schlussantwort gehört in den Statusblock der Übergabe, auch wenn sie schon gestreamt wurde (sawStreamText);
+          // nur das Ausgeben bleibt davon abhängig.
           { const u = uebergabeStand.get(live.key); if (u) { u.letzte = String(block.text ?? '').slice(-4000); saveUebergabe(); } }
-          emitModelText(live, block.text);
+          if (!live.sawStreamText) { live.progressed = true; emitModelText(live, block.text); }
         }
       }
       return;

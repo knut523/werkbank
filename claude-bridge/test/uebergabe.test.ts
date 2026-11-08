@@ -72,3 +72,24 @@ test('Zähler überleben den Neustart (Session-Ablage)', async () => {
   assert.equal(neu.c1.n, 2);
   assert.equal(sollUebergeben(neu.c1.ctx, {}), true, 'die Grenze greift auch nach dem Neustart');
 });
+
+test('Streamender Zug (includePartialMessages): die Schlussantwort landet trotzdem im Statusblock der Übergabe', async () => {
+  const calls: string[] = [];
+  let n = 0, ctx = 160_000;
+  const query = (a: any) => (async function* () {
+    calls.push(await textOf(a.prompt));
+    const sid = `st-${++n}`;
+    yield { type: 'system', subtype: 'init', session_id: sid };
+    yield { type: 'stream_event', parent_tool_use_id: null, session_id: sid, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Streamteil ' } } };
+    yield { type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { model: 'm', content: [{ type: 'text', text: 'Streamteil A fertig.\n- [ ] Streamteil B offen' }], usage: { input_tokens: 10, cache_read_input_tokens: ctx } } };
+    yield { type: 'result', subtype: 'success', session_id: sid, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } };
+  })();
+  const conv = randomUUID();
+  const zug = async (prompt: string) => { const s = sink(); await mod.handleTurn({ userId: 'u1', convId: conv, token: 'tok-a', prompt, history: '', sink: s, query } as any); return s; };
+  await zug('Baue Y. DoD: Test grün');
+  const ablage = JSON.parse((await import('node:fs')).readFileSync(join(STATE, 'session-uebergabe.json'), 'utf8'));
+  assert.match(ablage[`u1:${conv}`]?.letzte ?? '', /Streamteil B offen/, 'letzte Antwort gemerkt');
+  await zug('weiter');
+  assert.doesNotMatch(calls[1], /Stand: \(keine\)/);
+  assert.match(calls[1], /Streamteil B offen/);
+});
