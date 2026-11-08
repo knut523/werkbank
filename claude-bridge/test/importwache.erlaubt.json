@@ -45,6 +45,12 @@
     ],
     "grund": "die zentrale Startstelle starte(): einziger erlaubter spawn, gesetzte Prozessgruppe und Aufraeumen"
   },
+  "claude-bridge/src/sauberenv.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "execFileSync fuer die kurze git-config-Abfrage des Credential-Helpers (3 s Timeout), aus sessions.ts hierher verschoben"
+  },
   "claude-bridge/src/sessions.ts": {
     "namen": [
       "execFileSync",
