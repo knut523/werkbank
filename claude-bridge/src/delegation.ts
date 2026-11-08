@@ -222,7 +222,7 @@ export function run(cmd: string, args: string[], o: { cwd: string; env?: Record<
     const resolveEinmal = (code: number, fehler?: string) => { if (fertig) return; fertig = true; clearTimeout(timer); o.signal?.removeEventListener('abort', brichAb); resolve({ code, out: fehler ?? (o.max ? out.slice(-o.max) : out) }); };
     let id = '';
     let kind: ChildProcess;
-    try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'run', fristMs: o.timeoutMs ?? 30_000, cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv })); } catch (e: any) { return resolveEinmal(127, String(e?.message ?? e)); }
+    try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'run', fristMs: o.timeoutMs ?? 30_000, cwd: o.cwd, env: (o.env ?? process.env /* Vorgabe nur für feste Brücken-Befehle (git); Code aus Repo/Modell: Aufrufer übergibt checkEnv() */) as NodeJS.ProcessEnv })); } catch (e: any) { return resolveEinmal(127, String(e?.message ?? e)); }
     const add = (d: Buffer) => { out += d.toString('utf8'); if (out.length > grenze) out = out.slice(-grenze); };
     kind.stdout?.on('data', add); kind.stderr?.on('data', add);
     let abgebrochen = false;

@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { FLASH, DEEPSEEK } from './modellwahl.ts';
 import type { Phase } from './strangpruefung.ts';
 import { starte, beenden, gruppeWeg } from './prozesse.ts';
+import { checkEnv, raeumeEnv } from './sauberenv.ts';
 
 type Env = Record<string, string | undefined>;
 export const OPUS = 'opus';
@@ -142,14 +143,18 @@ export const groupKill = (pid: number) => { try { process.kill(-pid, 'SIGKILL');
 /** Hilfs-Prüfer: Befehl ohne Shell (Argumentliste) über den Prozessstarter (R5: Register, eigene Gruppe) im Worktree, grün bei Exit 0; Timeout und Abbruchsignal → beenden(id) beendet die ganze Gruppe; über den Semaphor. */
 export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { sem?: Semaphor; timeoutMs?: number; besitzer?: string; signal?: AbortSignal } = {}) => (o.sem ?? pruefSemaphor).run(() => new Promise<{ ok: boolean; log: string }>((res) => {
   let log = '', fertig = false;
-  const { id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'pruefung', fristMs: o.timeoutMs ?? 15 * 60_000, cwd });
+  // Tests sind vom Modell geschriebener Code: saubere Umgebung (keine Geheimnisse, kein Credential-Helfer) und Wegwerf-HOME, danach gelöscht.
+  const env = checkEnv();
+  let id: string, kind: ReturnType<typeof starte>['kind'];
+  try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'pruefung', fristMs: o.timeoutMs ?? 15 * 60_000, cwd, env })); } catch (e) { raeumeEnv(env); throw e; }
   const an = (d: Buffer) => { log = (log + d).slice(-8000); };
   kind.stdout?.on('data', an); kind.stderr?.on('data', an);
   let abgebrochen = false;
   const brichAb = () => { abgebrochen = true; if (!fertig && id) void beenden(id); };
   const ende = (ok: boolean, zusatz = '') => { if (fertig) return; fertig = true; clearTimeout(t); o.signal?.removeEventListener('abort', brichAb); const r = { ok, log: (log + zusatz).slice(-4000) };
     // Rückkehr erst, wenn kein Gruppenmitglied mehr läuft: der Aufrufer darf danach z. B. den Worktree entfernen.
-    if (kind.pid) { groupKill(kind.pid); void gruppeWeg(kind.pid).then(() => res(r)); } else res(r); };
+    const fin = () => { raeumeEnv(env); res(r); };
+    if (kind.pid) { groupKill(kind.pid); void gruppeWeg(kind.pid).then(fin); } else fin(); };
   let zeit = false;
   const t = setTimeout(() => { zeit = true; brichAb(); }, o.timeoutMs ?? 15 * 60_000); // Ergebnis erst bei 'close': Kind ist dann abgeholt, kein Zombie in der Gruppe
   o.signal?.addEventListener('abort', brichAb, { once: true });

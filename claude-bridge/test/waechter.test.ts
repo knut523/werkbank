@@ -41,7 +41,7 @@ test('Zustand von verschwundenen Einträgen wird verworfen', () => {
 });
 
 test('echter Prozess: Frist 100 ms, kleiner Takt/Gnade → Gruppe tot, Eintrag weg', async () => {
-  const { id, kind } = starte('sh', ['-c', 'sleep 600 & wait'], { besitzer: 'wtest:s', art: 'test', fristMs: 100 });
+  const { id, kind } = starte('sh', ['-c', 'sleep 600 & wait'], { besitzer: 'wtest:s', art: 'test', fristMs: 100, env: process.env });
   const pid = kind.pid!;
   const meldungen: string[] = [];
   const stop = starteWaechter({ takt: 50, gnadeMs: 150, leerlaufMs: 600_000, melde: (_b, t) => { meldungen.push(t); } });

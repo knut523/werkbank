@@ -10,7 +10,9 @@ export interface Eintrag {
   cmd: string; startedAt: number; fristAt: number | null; zuletztAktiv: number;
 }
 export interface StarteOpt {
-  besitzer: string; art: string; fristMs?: number; cwd?: string; env?: NodeJS.ProcessEnv; stdio?: StdioOptions;
+  besitzer: string; art: string; fristMs?: number; cwd?: string;
+  /** Pflicht, nie implizit: wer `process.env` will, schreibt es hin (nur für Prozesse der Brücke selbst); Code aus Modell/Repo bekommt `checkEnv()` (sauberenv.ts). */
+  env: NodeJS.ProcessEnv; stdio?: StdioOptions;
   /** Uhr (Tests). */ jetzt?: () => number;
 }
 

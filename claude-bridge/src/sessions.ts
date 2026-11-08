@@ -12,6 +12,7 @@ import { vorlaufAufraeumen, registerDatei } from './prozesse.ts';
 import { schreibzielProblem, geheimHinterLink, GEHEIM } from './jcode-pre-tool.ts';
 import { tmpdir, homedir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
+import { SECRET_ENV, checkEnv, raeumeEnv, orchGitEnv as orchGitEnvSauber } from './sauberenv.ts';
 import { join, resolve, dirname, relative as relPath, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -164,14 +165,12 @@ const cfg = {
   turnMaxMs: Number(process.env.BRIDGE_TURN_MAX_S || 10800) * 1000,
   confirmTimeoutMs: Number(process.env.BRIDGE_CONFIRM_TIMEOUT_S || 1800) * 1000,
 };
-// Was nie in die Umgebung einer Sitzung oder eines Prüfbefehls der Brücke gelangt (Variablennamen).
-const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DATABASE_URL/i;
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
 /** Plan Prozessregister R6: die Claude-CLI startet über `starte` (eigene Gruppe, Registereintrag, Besitzer = Strang), nicht im SDK-eigenen Spawn. */
 export const cliStarter = (besitzer: string) => (o: SpawnOptions) => {
-  const { id, kind } = starte(o.command, o.args, { besitzer, art: 'claude-cli', cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const { id, kind } = starte(o.command, o.args, { besitzer, art: 'claude-cli', cwd: o.cwd, env: o.env /* vom SDK/Brücke gebaute Sitzungsumgebung (Geheimnisse dort schon gefiltert) */, stdio: ['pipe', 'pipe', 'pipe'] });
   if (o.signal) { if (o.signal.aborted) void beenden(id); else o.signal.addEventListener('abort', () => void beenden(id), { once: true }); }
   return kind;
 };
@@ -709,31 +708,8 @@ export function strandDeny(profil: string): string[] {
   return [...ORCH_DENY, ...orchMcpDeny(), ...(profil === 'leser' ? LESER_DENY : [])];
 }
 
-// Git ohne Zugangsdaten für Stränge: eigene globale Konfiguration (nur Name/E-Mail), kein Credential-Helfer, Push auf
-// github.com umgeleitet auf eine ungültige Adresse, keine Passwortabfrage. Wer die Umgebung im Befehl ausdrücklich
-// überschreibt, kommt daran vorbei — dann greifen orchestratorBlock und der Klassifikator (ehrlich im Plan).
-let orchGitConfig: string | null = null;
-export function orchGitEnv(env: Record<string, string | undefined>): void {
-  if (!orchGitConfig || !existsSync(orchGitConfig)) {
-    const get = (k: string) => { try { return execFileSync('git', ['config', '--global', '--get', k], { encoding: 'utf8', timeout: 3000 }).trim(); } catch { return ''; } };
-    const name = (get('user.name') || 'Werkbank-Agent').replace(/[\n"\\]/g, '');
-    const email = (get('user.email') || 'werkbank-agent@localhost').replace(/[\n"\\]/g, '');
-    orchGitConfig = join(cfg.stateDir, 'orch-gitconfig');
-    writeFileSync(orchGitConfig, [
-      '# Von der claude-bridge für Orchestrator-Stränge erzeugt: kein Push, keine Zugangsdaten.',
-      '[user]', `\tname = ${name}`, `\temail = ${email}`,
-      '[credential]', '\thelper =',
-      '[url "https://push-gesperrt.invalid/"]', '\tpushInsteadOf = https://github.com/', '\tpushInsteadOf = git@github.com:', '\tpushInsteadOf = ssh://git@github.com/',
-      '',
-    ].join('\n'));
-  }
-  env.GIT_CONFIG_GLOBAL = orchGitConfig;
-  env.GIT_CONFIG_NOSYSTEM = '1';
-  env.GIT_TERMINAL_PROMPT = '0';
-  env.GIT_ASKPASS = '/bin/false';
-  env.SSH_ASKPASS = '/bin/false';
-  env.GCM_INTERACTIVE = 'never';
-}
+/** Git ohne Zugangsdaten für Stränge (Umsetzung in sauberenv.ts; Zustandsordner dieser Brücke). */
+export function orchGitEnv(env: Record<string, string | undefined>): void { orchGitEnvSauber(env, cfg.stateDir); }
 
 // Leitstand (Plan 132): feste Regeln im Systemtext — überleben jede Verdichtung, anders als die erste Nachricht (B4/B9).
 export const LEITSTAND_APPEND = `Dieser Chat ist der HAUPTCHAT (früher „Leitstand“): Du bist Knuts Orchestrator, oben angepinnt in der Chat-Seitenleiste. Du startest und koordinierst Arbeitsstränge (Unter-Chats, in der Seitenleiste unter dir) mit den Werkzeugen orch_start, orch_list, orch_show, orch_send, orch_review, orch_thema, orch_ask und orch_questions (Werkbank-MCP) — nicht über Bash oder scripts/orch.
@@ -2353,21 +2329,6 @@ function phasePrompt(auftrag: string, uebergabe: string, phase: Phase): string {
   return `Neue Phase „${phase}“ dieses Strangs (neue Sitzung; der bisherige Chatverlauf ist absichtlich nicht dabei — Kontextkappung, Plan 165). Arbeite auf Grundlage von Auftrag und Übergabe ohne Rückfragen weiter; lies Dateien, die unter „Stand“ genannt sind, selbst nach.\n\n## Auftrag des Strangs (erste Nachricht)\n\n${auftrag || '(nicht gespeichert — siehe Übergabe)'}\n\n## Übergabe der vorigen Phase\n\n${uebergabe}`;
 }
 
-/**
- * Umgebung für Prüfbefehle der Brücke: ohne Geheimnisse (wie die Sitzung), Git ohne Zugangsdaten und ein leeres HOME — die
- * Tests führen vom Worker geschriebenen Code aus und sollen weder ~/.claude noch andere Zugangsdaten im Home sehen (Pass B, 3).
- * Kein Netz-Schnitt: dafür fehlt auf der VM eine Sandbox (Restrisiko im Bericht).
- */
-function checkEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env };
-  for (const k of Object.keys(env)) if (SECRET_ENV.test(k)) delete env[k];
-  for (const k of ['ANTHROPIC_BASE_URL', 'BW_SESSION', 'NODE_OPTIONS', 'CLAUDE_CONFIG_DIR', 'SSH_AUTH_SOCK']) delete env[k];
-  orchGitEnv(env);
-  const home = mkdtempSync(join(tmpdir(), 'werkbank-pruef-'));
-  Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'), npm_config_cache: join(home, '.npm'), CI: '1' });
-  return env;
-}
-
 type DStatus = 'laeuft' | 'fertig' | 'fehlgeschlagen' | 'abgebrochen';
 interface Deleg {
   id: string; userId: string; parent: string; parentConv: string; workerConv: string; workerKey: string; rolle: Rolle; risiko: Risiko;
@@ -2384,7 +2345,7 @@ const laufend = () => [...delegs.values()].filter((d) => d.status === 'laeuft').
 /** Prüfbefehle mit eigener, danach gelöschter HOME. */
 async function pruefenSauber(dir: string, base: string, o: { fest?: { ref: string; sha: string } | null; maxMs?: number; nur?: (name: string) => boolean } = {}) {
   const env = checkEnv();
-  try { return await pruefen(dir, base, env, o); } finally { try { rmSync(env.HOME!, { recursive: true, force: true }); } catch { /* egal */ } }
+  try { return await pruefen(dir, base, env, o); } finally { raeumeEnv(env); }
 }
 
 /** Was für Worker gerade frei ist (C7) — dieselbe Rechnung wie workerQueue; für Prüferwahl und die Lage im Ergebnis. */
@@ -2527,7 +2488,7 @@ export function jcodeSpawn(o: { cwd: string; prompt: string; model: string | nul
     GH_CONFIG_DIR: JCODE_GH_LEER(), GIT_SSH_COMMAND: 'ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o BatchMode=yes', GIT_TERMINAL_PROMPT: '0', ...o.extra };
   return new Promise((res) => {
     // R4 (Prozessregister): eigene Gruppe + Register; Timeout/Abbruch → beenden (Gruppe TERM→KILL), damit Enkel mitsterben.
-    const r = starte(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { besitzer: o.besitzer ?? `jcode:${process.pid}:${Date.now().toString(36)}`, art: 'jcode', fristMs: o.timeoutS * 1000, cwd: o.cwd, env });
+    const r = starte(JCODE_BIN(), ['--provider-profile', 'melious', ...(o.model ? ['--model', o.model] : []), '--tools', o.tools, 'run', '--json', jcodePromptArg(o.prompt)], { besitzer: o.besitzer ?? `jcode:${process.pid}:${Date.now().toString(36)}`, art: 'jcode', fristMs: o.timeoutS * 1000, cwd: o.cwd, env /* eigene, schmale Umgebung (PATH/HOME/LANG + Melious-Schlüssel); trusted Brücken-Prozess */ });
     const c = r.kind;
     let so = '', se = '';
     c.stdout.on('data', (b) => { so += b; if (so.length > 4_000_000) so = so.slice(-4_000_000); });

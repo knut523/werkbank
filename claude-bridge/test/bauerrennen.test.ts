@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, bauerDeckelMs, diffGroesse, pruefLauf, groupKill, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
@@ -255,4 +255,23 @@ test('L3a: nachAblehnung nach 2 abgelehnten Fixrunden → { art: sonnet, fehlerl
   nachAblehnung(l, 'm1', t0 + 1000); nachAblehnung(l, 'm2', t0 + 2000); nachAblehnung(l, 'm3', t0 + 3000);
   const e = nachAblehnung(l, 'm4', t0 + 4000);
   assert.equal(e.art, 'sonnet'); assert.equal((e as any).bauer, undefined); assert.equal((e as any).fehlerlogs.length, 4);
+});
+
+// ---- Prüfumgebung: vom Modell geschriebene Tests sehen keine Geheimnisse und nicht das echte HOME ----
+test('pruefLauf: Test sieht weder Token noch SSH_AUTH_SOCK noch das echte HOME; Wegwerf-HOME danach weg', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'pe-'));
+  writeFileSync(join(cwd, 'x.test.js'), `require('node:fs').writeFileSync('out.json', JSON.stringify({ t: process.env.WERKBANK_INTERNAL_TOKEN ?? null, h: process.env.HOME ?? null, s: process.env.SSH_AUTH_SOCK ?? null, g: process.env.GITHUB_TOKEN ?? null }));\n`);
+  const alt = { t: process.env.WERKBANK_INTERNAL_TOKEN, h: process.env.HOME, s: process.env.SSH_AUTH_SOCK, g: process.env.GITHUB_TOKEN };
+  Object.assign(process.env, { WERKBANK_INTERNAL_TOKEN: 'sentinel-token-1', HOME: '/sentinel/echtes-home', SSH_AUTH_SOCK: '/sentinel/agent.sock', GITHUB_TOKEN: 'sentinel-gh' });
+  try {
+    const r = await pruefLauf(cwd, 'env', ['-u', 'NODE_TEST_CONTEXT', 'node', '--test', 'x.test.js']);
+    assert.equal(r.ok, true, r.log);
+    const o = JSON.parse(readFileSync(join(cwd, 'out.json'), 'utf8'));
+    assert.equal(o.t, null); assert.equal(o.s, null); assert.equal(o.g, null);
+    assert.notEqual(o.h, '/sentinel/echtes-home');
+    assert.match(o.h, /werkbank-pruef-/);
+    assert.equal(existsSync(o.h), false, 'Wegwerf-HOME muss nach dem Lauf gelöscht sein');
+  } finally {
+    for (const [k, v] of [['WERKBANK_INTERNAL_TOKEN', alt.t], ['HOME', alt.h], ['SSH_AUTH_SOCK', alt.s], ['GITHUB_TOKEN', alt.g]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });
