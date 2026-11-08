@@ -60,12 +60,16 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return sonnetUebergabe();
   let zone = false;
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
+  // Jeder Versuch hat eigene Worktree-Identität (Zähler je Bauer): der Retry des ersten Bauers kollidiert nicht mit dessen Rennversuch.
+  // subs = jüngster Versuch je Bauer (schnell/voll prüfen den Kandidaten direkt nach dem Bauen); alle = jeder Versuch, für das Aufräumen.
+  const versuche = new Map<string, number>(), alle: { bauer: string; dir: string; branch: string }[] = [];
   const laufend: { bauer: string; p: Promise<unknown>; offen: () => boolean }[] = [];
   const bauenInner: Deps['bauen'] = async (bauer, a, op) => {
-      const anlegen = subWorktree(o.cwd, `${o.id}-${kurz(bauer)}`); op?.vorbereitung?.(anlegen);   // Deckel-Uhr startet erst, wenn der Worktree steht
+      const n = versuche.get(bauer) ?? 0; versuche.set(bauer, n + 1);
+      const anlegen = subWorktree(o.cwd, `${o.id}-${kurz(bauer)}-${n}`); op?.vorbereitung?.(anlegen);   // Deckel-Uhr startet erst, wenn der Worktree steht
       const s = await anlegen;
       if ('error' in s) return { bauer, ok: false, diff: '', log: s.error };
-      subs.set(bauer, { dir: s.dir, base: s.base });
+      subs.set(bauer, { dir: s.dir, base: s.base }); alle.push({ bauer, dir: s.dir, branch: s.branch });
       o.status?.(`⏳ Best-of-N: ${bauer} baut in eigenem Worktree …`);
       const p = op?.fehlerlogs?.length ? `${a.plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : a.plan;
       const r = await o.zug(s.dir, bauer, p, op?.signal);
@@ -107,11 +111,12 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     for (const k of geschlossen.keys()) { if (geschlossen.size <= 50) break; geschlossen.delete(k); }   // bounded: oldest out (loser retry only matters for 24 h)
   }
   // Council 6: ein Bauer, der den Abbruch nicht bestätigt hat (Gnadenfrist um), behält seinen Worktree, bis sein Promise endet.
-  for (const [b, s] of subs) {
-    const l = laufend.find((x) => x.bauer === b && x.offen());
-    if (!l) { await removeWorktree(s.dir).catch(() => {}); continue; }
-    o.status?.(`⚠️ Best-of-N: Abbruch unbestätigt — ${b} läuft noch, Worktree ${s.dir} bleibt bis zu seinem Ende`);
-    void l.p.catch(() => {}).then(() => removeWorktree(s.dir).catch(() => {}));
+  const weg = (x: { dir: string; branch: string }) => removeWorktree(x.dir).catch(() => {}).then(() => git(o.cwd, 'branch', '-D', x.branch)).catch(() => {});
+  for (const s of alle) {
+    const l = laufend.find((x) => x.bauer === s.bauer && x.offen());
+    if (!l) { await weg(s); continue; }
+    o.status?.(`⚠️ Best-of-N: Abbruch unbestätigt — ${s.bauer} läuft noch, Worktree ${s.dir} bleibt bis zu seinem Ende`);
+    void l.p.catch(() => {}).then(() => weg(s));
   }
   if (lauf.weiter === 'sonnet' && !zone) return sonnetUebergabe();   // L3b: alle Bauer rot (auch der Retry) → Sonnet auf Claude, nie 'sonnet' auf OC2
   if (zone) return { ok: false, text: '', grund: 'Schutzzone (Diff berührt Migration/Auth/Billing/Workflow/.env) — Opus baut, Sieger nicht angewendet' };

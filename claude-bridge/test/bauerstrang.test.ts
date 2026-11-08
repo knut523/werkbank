@@ -137,7 +137,7 @@ test('P8: Bauer ignoriert den Abbruch über die Gnadenfrist hinaus → Worktree 
     assert.equal(meldungen.filter((t) => t.includes('Abbruch unbestätigt')).length, dirs.length, 'eine Zeile je Bauer');
     freigabe();
     const ende = Date.now() + 10_000;
-    while (dirs.some((x) => existsSync(x)) && Date.now() < ende) await new Promise((r) => setTimeout(r, 20));
+    while ((dirs.some((x) => existsSync(x)) || g(cwd, 'branch', '--list', 'werkbank/deleg-*').trim()) && Date.now() < ende) await new Promise((r) => setTimeout(r, 20));   // Aufräumen = Worktree, dann Branch
     assert.ok(dirs.every((x) => !existsSync(x)), 'nach dem Ende entfernt');
     assert.equal(schriebDanach, false);
   } finally { rmSync(wurzel, { recursive: true, force: true }); }
@@ -151,6 +151,29 @@ test('L3b: alle Bauer bleiben rot → ok:false mit Sonnet-Klassen-Grund (Überga
   assert.match(r!.grund, /Sonnet-Klasse/); assert.match(r!.grund, /Sonnet baut/);
   assert.ok(gebaut.length >= 2, 'beide Bauer liefen');
   assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+  rmSync(wurzel, { recursive: true, force: true });
+});
+
+test('L3c: beide Rennbauer rot, Retry (erster Bauer, eigener Worktree) baut wirklich, gewinnt; danach kein .deleg-Worktree, kein werkbank/deleg-Branch', async () => {
+  const { wurzel, cwd } = repo();
+  const aufrufe: { m: string; dir: string; prompt: string }[] = [];
+  const retryZug = async (dir: string, m: string, prompt: string) => {
+    aufrufe.push({ m, dir, prompt });
+    writeFileSync(join(dir, 'src/a.ts'), zeilen(aufrufe.length > 2 ? 3 : 9));
+    if (aufrufe.length > 2) g(dir, 'commit', '-q', '-a', '-m', 'retry');
+    return { ok: true, text: `fertig ${m}`, grund: '' };
+  };
+  let schnellN = 0;
+  const pruefeRot2 = async (_d: string, _b: string, art: 'schnell' | 'voll') => (art === 'schnell' && ++schnellN <= 2 ? { ok: false, log: 'tsc rot im Rennen' } : { ok: true, log: '' });
+  const r = await bestofnStrang({ cwd, id: 'x9', prompt: 'ändere src/a.ts', env: {}, zug: retryZug, pruefe: pruefeRot2 });
+  assert.equal(aufrufe.length, 3, 'zwei Rennbauer plus Retry liefen');
+  assert.equal(aufrufe[2].m, FLASH, 'Retry = erster Bauer');
+  assert.ok(aufrufe.slice(0, 2).every((x) => x.dir !== aufrufe[2].dir), 'Retry hat eigenen Worktree');
+  assert.match(aufrufe[2].prompt, /Fehlerlogs/); assert.match(aufrufe[2].prompt, /tsc rot im Rennen/);
+  assert.equal(r?.ok, true, `Retry-Sieger angewendet: ${JSON.stringify(r)}`);
+  assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(3));
+  assert.ok(!/\.deleg/.test(g(cwd, 'worktree', 'list')), 'kein .deleg-Worktree übrig');
+  assert.equal(g(cwd, 'branch', '--list', 'werkbank/deleg-*').trim(), '', 'kein werkbank/deleg-Branch übrig');
   rmSync(wurzel, { recursive: true, force: true });
 });
 
