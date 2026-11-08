@@ -31,7 +31,7 @@ import { wb } from './db.ts';
 import { meliousSettings } from './melious.ts';
 import { execErlaubt, execMinuten, schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
 import { reviewsCol, nachNeuemKopf, tickerSettings, tickerAus, reviewErlaubt, ME, type TickerSettings } from './prticker.ts';
-import { vorlauf, basisVon, motorAbschnitt, motorAn, reviewSchluesselFuer, dedupeAn } from './reviewmotor.ts';
+import { vorlauf, basisVon, motorAbschnitt, motorAn, reviewSchluesselFuer, dedupeAbfrage, dedupeAn } from './reviewmotor.ts';
 import { pruefeBefunde, kommentarAusBefunden, entwurfHash, postenErlaubt, KOMMENTAR_FORM } from './befunde.ts';
 import { gedaechtnisFuer, gedaechtnisMd, type AlterKommentar } from './prgedaechtnis.ts';
 
@@ -839,7 +839,8 @@ export async function reviewTick(deps: ReviewDeps): Promise<{ started: number; d
       const dm = await diffMaterial(wt, klonPfad(r.repo), kontext?.baseRefName ?? null, r.head, vorher?.head ?? null, deps.git);
       // B3 (Wave 21): derselbe Schlüssel (Kopf, Basis, Kommentare) wurde schon reviewt → das vorhandene Urteil gilt, kein neuer Strang.
       const schluessel = reviewSchluesselFuer({ headSha: r.head, baseSha: dm.basis ?? null, kontext, deep: !!r.deep });   // null (Kontext fehlt) → kein Dedupe
-      const gleich = dedupeAn() && schluessel ? (await reviewsCol().find({ repo: r.repo, number: r.number, head: r.head, schluessel, status: 'fertig', _id: { $ne: r._id }, paket: { $exists: true } }).sort({ doneAt: -1 }).limit(1).toArray())[0] as any ?? null : null;
+      const abfrage = dedupeAn() ? dedupeAbfrage(r, schluessel) : null;
+      const gleich = abfrage ? (await reviewsCol().find(abfrage as any).sort({ doneAt: -1 }).limit(1).toArray())[0] as any ?? null : null;
       if (gleich) {
         rmSync(dir, { recursive: true, force: true });
         await reviewsCol().updateOne({ _id: r._id }, { $set: { status: 'fertig', doneAt: now, schluessel, urteilVon: gleich._id, paket: gleich.paket, empfehlung: gleich.empfehlung ?? null, entwurf: gleich.entwurf ?? null, ohnePost: 'dedupe', note: `gleicher Stand (Kopf, Basis, Kommentare) wie ${gleich._id} — Urteil wiederverwendet`, startDay: null } });
