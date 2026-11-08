@@ -81,6 +81,7 @@ const TESTLINK = {
   description: 'Angemeldeten Test-Link für Sichtbares holen (olaf-admin, olaf-tariff-app, Werkbank-Testkopie, Ordner mit index.html): baut/startet eine Test-Umgebung für deinen Arbeitsordner (oder ordner = absoluter Pfad deines Worktrees, wenn der Arbeitsordner das Review-Paket ist), eigene lokale Test-DB, Mails im Trockenlauf, Proxy mit Test-Sitzung — und prüft sie (mit Sitzung 200, ohne 401/30x). Wartet bis Link oder Fehler (Build: einige Minuten). Den Link trägst du im Bericht unter review: ein (titel: Test-Link (angemeldet), url: …); „lokal“ ist für deine eigenen Screenshots. stop=true beendet die Umgebung, neu=true baut neu (frische DB), liste=true zeigt die laufenden.',
   inputSchema: { type: 'object', properties: { ordner: { type: 'string' }, stop: { type: 'boolean' }, neu: { type: 'boolean' }, liste: { type: 'boolean' } } },
   run: async (a: any) => (await call('/internal/testlink', { conv: process.env.WERKBANK_CONV_ID || '', ordner: a.ordner ?? '', stop: a.stop === true, neu: a.neu === true, liste: a.liste === true }, 30 * 60_000)).text,
+};
 // Deck-Review (docs/plan-deck-review.md): der Deck-Unter-Chat meldet je Kommentar zurück — die Werkbank prüft, dass dieser
 // Unter-Chat mit dem Deck verknüpft ist (Unterhaltung aus der Umgebung, nie aus den Argumenten).
 const DECK_RUECKMELDUNG = {
