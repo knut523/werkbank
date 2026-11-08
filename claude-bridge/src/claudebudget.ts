@@ -222,9 +222,9 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
   if (o.phase === 'review') return 'pruefer';
   return o.profil === 'leser' ? 'leser' : 'bauer';
 }
-let meliousFrei = false;
-/** Von sessions.ts gesetzt, wenn Melious für die Person nutzbar ist (Ausweg bei heißen Claude-Konten). */
-export const setzeMelious = (frei: boolean) => { meliousFrei = frei; };
+const meliousFrei = new Map<string, boolean>();
+/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Alter Aufruf ohne userId (boolean) gilt prozessweit weiter. */
+export const setzeMelious = (userId: string | boolean, frei?: boolean) => { meliousFrei.set(typeof userId === 'boolean' ? '' : userId, typeof userId === 'boolean' ? userId : frei === true); };
 
 /** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
 export function budgetOrdnen<T extends { id: string; kind?: string }>(queue: T[], o: { rang: number; modell: string; bevorzugt?: string | null; now: number }): T[] {
@@ -249,7 +249,7 @@ export function endpruefungKontoFuer(ereignis: string, item: string, now: number
   return plan.items.includes(item) ? plan.konto : null;
 }
 
-function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now: number, env: Record<string, string | undefined>): string {
+function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean; userId?: string }, now: number, env: Record<string, string | undefined>): string {
   if (o.rolle === 'endpruefung') {
     if (o.vorgeprueft === false) return 'wartet: Endprüfung — erst die Sonnet-Vorprüfung, sonst frisst das Sicherheitsnetz das Limit';
     const e = o.ereignis ?? o.item ?? '', it = o.item ?? e;
@@ -259,7 +259,8 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
   }
   const konten = [...lagen.values()];
   if (!konten.length) return '';
-  const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: meliousFrei ? { modell: 'melious' } : null, now });
+  const melOk = (o.userId !== undefined ? meliousFrei.get(o.userId) : meliousFrei.get('')) ?? false;
+  const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: melOk ? { modell: 'melious' } : null, now });
   return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
 }
 
@@ -267,7 +268,7 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
  * Einhängepunkt für kapazitaetGrund (Strang: wartet in der Schlange) und sessions.ts (Hauptchat: nur Hinweis, nie Schlange).
  * '' = darf. rang kommt später aus Paket D (Vorgabe 1).
  */
-export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
+export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean; userId?: string }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
   if (!budgetAn(env)) return '';
   if (o.rolle === 'hauptchat') return hauptchatRest(now, env) <= 0 ? `wartet: Tagesbudget — Hauptchat hat seine ${hauptchatTagesBudget(env)} % Wochenanteil für heute verbraucht (morgen wieder)` : '';
   return wartenGrund(o, now, env);

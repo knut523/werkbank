@@ -1552,10 +1552,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
     rolle: rolleVon({ leit: kind === 'leitstand', phase: orchMap[key]?.phase, profil: orchMap[key]?.profil }), rang: 1, modell: orchMap[key]?.phase ? phaseModell(orchMap[key]!.phase!).modell : undefined,
-    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft,
+    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft, userId: safeId(req.userId),
     claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber',
     // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
-    ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { userId: req.userId, jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
+    ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
@@ -1852,7 +1852,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     return [...(melOk ? [melAcc!] : []), ...cq];
   };
   if (claudeBudgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
-  setzeMelious(!!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));
+  setzeMelious(safeId(req.userId), !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));
   // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
   if (claudeBudgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
     const a = accounts.find((x) => x.id === id);

@@ -164,6 +164,16 @@ test('13 Probe: unbekanntes Konto wird beim ersten Sehen probiert, danach höchs
   assert.equal(n, 2); assert.equal(b.kontoFrei('k2'), true);
 });
 
+test('15 meliousFrei je Person: unabhängige Setzungen — heiße Konten: a weicht auf Melious aus, b wartet', () => {
+  b.aktualisiere(cswap([acc(1, 99, 50), acc(2, 99, 60)]), { a: '1', b: '2' });
+  b.setzeMelious('a', true); b.setzeMelious('b', false);
+  assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), '');   // a: Melious frei → kein Wartegrund
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'b' }, T0), /^wartet: Kontingent.*braucht dich/);   // b: wartet
+  b.setzeMelious('a', false);
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), /^wartet: Kontingent/);
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1 }, T0), /^wartet: Kontingent/);   // ohne userId: default false
+});
+
 test('14 Zustand atomar auf Platte: Kalibrierung, Breaker, Hauptchat-Tag, Reset überleben den Neustart', async () => {
   const f = join(mkdtempSync(join(tmpdir(), 'cb-')), 'claudebudget.json');
   b.budgetMerkeIn(f);
