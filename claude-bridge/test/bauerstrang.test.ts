@@ -67,3 +67,14 @@ test('Sonnet-Klasse im Strang: Sonnetzone → ok:false mit Sonnet-Grund, kein Ba
   assert.equal(a?.ok, true, 'Abschaltung → alter Pfad');
   rmSync(wurzel, { recursive: true, force: true });
 });
+
+test('Plan ohne Pfade, Bauer ändert migrations/: Diff berührt Schutzzone → nicht angewendet, ok:false; harmloser Diff wird weiter angewendet', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const mig = async (dir: string, m: string) => { gebaut.push(m); mkdirSync(join(dir, 'migrations'), { recursive: true }); writeFileSync(join(dir, 'migrations/x.sql'), 'drop table t;\n'); writeFileSync(join(dir, 'src/a.ts'), zeilen(1)); return { ok: true, text: m, grund: '' }; };
+  const r = await bestofnStrang({ cwd, id: 'z1', prompt: 'fix the login bug', env: {}, zug: mig, pruefe });
+  assert.equal(r?.ok, false); assert.match(r!.grund, /Schutzzone/);
+  assert.equal(existsSync(join(cwd, 'migrations/x.sql')), false); assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n');
+  const o = await bestofnStrang({ cwd, id: 'z2', prompt: 'fix the login bug', env: {}, zug: zug({ [FLASH]: 3, [DEEPSEEK]: 2 }), pruefe });
+  assert.equal(o?.ok, true); assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2));
+  rmSync(wurzel, { recursive: true, force: true });
+});
