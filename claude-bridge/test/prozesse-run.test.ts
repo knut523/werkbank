@@ -100,3 +100,38 @@ test('run()/pruefLauf: Vorgabe besitzer "bridge", art "run"/"pruefung"; danach R
     assert.ok(await warte(() => liste({ besitzer: 'bridge' }).length === 0), 'beide ausgetragen');
   } finally { await beenden('bridge', 2000).catch(() => { /* egal */ }); }
 });
+
+// ---- Gegenprüfung R5: Fehlerpfad eines nicht startbaren Befehls (ENOENT, z. B. fehlendes Git oder falsches cwd) ----
+// run() ist laut Vertrag ein Promise<{code, out}> (Startfehler → 127); der Startfehler darf weder die Brücke abräumen
+// noch als Ausnahme an den Aufrufer gehen. Je Fall ein eigener Kindprozess, damit ein Absturz nicht den Testlauf verdeckt.
+const sonde = (rumpf: string) => `const { run } = await import(${JSON.stringify(new URL('../src/delegation.ts', import.meta.url).href)});\n${rumpf}\n`;
+const starteSonde = async (name: string, rumpf: string) => {
+  const { spawnSync } = await import('node:child_process');
+  const { writeFileSync } = await import('node:fs');
+  const datei = join(dir, `sonde-${name}.mjs`);
+  writeFileSync(datei, sonde(rumpf));
+  return spawnSync(process.execPath, [datei], { encoding: 'utf8', timeout: 30_000, cwd: dir });
+};
+
+test('run(): nicht startbarer Befehl → {code:127} und kein Absturz der Brücke', async () => {
+  // fehlender Befehl (kein git im PATH) und fehlendes cwd (entfernter Unter-Worktree: removeWorktree ruft git mit genau diesem cwd); beides ist derselbe Startfehler.
+  const faelle: [string, string][] = [
+    ['fehlender Befehl', `await run('gibtsnicht-xyz-9', [], { cwd: ${JSON.stringify(dir)} })`],
+    ['fehlendes cwd', `await run('git', ['rev-parse', 'HEAD'], { cwd: ${JSON.stringify(join(dir, 'gibtsnicht-xyz-cwd'))} })`],
+  ];
+  for (const [name, aufruf] of faelle) {
+    const res = await starteSonde(`enoent-${name.split(' ')[0]}`, `const r = ${aufruf};\nconsole.log('ERGEBNIS ' + JSON.stringify(r));`);
+    assert.equal(res.status, 0, `${name}: Kindprozess abgestürzt (status ${res.status}): ${String(res.stderr ?? '').split('\n').slice(0, 3).join(' | ')}`);
+    assert.match(String(res.stdout), /"code":127/, `${name}: Ergebnis fehlt: ${String(res.stdout).slice(-200)}`);
+  }
+});
+
+test('run(): nicht startbarer Befehl mit Abbruchsignal → {code:127} statt Ausnahme', async () => {
+  const res = await starteSonde('enoent-signal', [
+    `const ac = new AbortController();`,
+    `try { const r = await run('gibtsnicht-xyz-9', [], { cwd: ${JSON.stringify(dir)}, signal: ac.signal }); console.log('ERGEBNIS ' + JSON.stringify(r)); }`,
+    `catch (e) { console.log('GEWORFEN ' + (e && e.constructor ? e.constructor.name : String(e))); }`,
+  ].join('\n'));
+  assert.equal(res.status, 0, `Kindprozess abgestürzt (status ${res.status}): ${String(res.stderr ?? '').split('\n').slice(0, 3).join(' | ')}`);
+  assert.match(String(res.stdout), /ERGEBNIS \{"code":127/, `statt {code:127}: ${String(res.stdout).slice(-200)}`);
+});
