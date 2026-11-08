@@ -36,6 +36,14 @@ test('Tamper-Guard: entfernte Assertion, geänderte Zeile, Skip-Marker, gelösch
   assert.deepEqual(tamperGruende(diffN(3).replace(/-/g, '-')), [], 'Quellcode ist frei');
 });
 
+test('Tamper-Guard: erweiterte Import-Zeile (auch mehrzeilig) ist kein Tamper, entfernte Assertion daneben schon', () => {
+  const t = 'test/a.test.ts';
+  const kopf = `diff --git a/${t} b/${t}\n--- a/${t}\n+++ b/${t}\n`;
+  assert.deepEqual(tamperGruende(kopf + "-import { a } from '../src/a.ts';\n+import { a, b } from '../src/a.ts';\n+test('b', () => assert.ok(b()));"), []);
+  assert.deepEqual(tamperGruende(kopf + "-import {\n-  a,\n-} from '../src/a.ts';\n+import {\n+  a,\n+  b,\n+} from '../src/a.ts';"), []);
+  assert.equal(tamperGruende(kopf + "-import { a } from '../src/a.ts';\n+import { a, b } from '../src/a.ts';\n-  assert.equal(a(), 1);").length, 1);
+});
+
 test('Auswahl: Tamper disqualifiziert den kleineren Diff; sonst kleinerer Diff; Gleichstand → glm-flash; Repro/tsc/Tests rot raus', () => {
   const tamper = `diff --git a/test/a.test.ts b/test/a.test.ts\n--- a/test/a.test.ts\n+++ b/test/a.test.ts\n-assert.ok(1)\n`;
   const w1 = waehle([{ bauer: FLASH, ok: true, diff: tamper, schnell: gruen }, { bauer: DEEPSEEK, ok: true, diff: diffN(9), schnell: gruen }]);
