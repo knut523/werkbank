@@ -22,7 +22,7 @@ import { GIT_SAFE } from './gitsafe.ts';
 import { readBericht, paketDatei, reviewDir, findPaket } from './bericht.ts';
 import { paketFile, PAKET_RE, renderPaketMd } from './reviewpakete.ts';
 import { execSummary } from './berichtkopf.ts';
-import { schutzpfadGate } from './schutzpfade.ts';
+import { schutzpfadGate, geaenderteDateienArgs } from './schutzpfade.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 export const freigaben = () => wb().collection('freigaben');
@@ -67,8 +67,8 @@ export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
     commits: all.slice(0, 30), more: Math.max(0, all.length - 30),
     stat: mergeBase ? (tryGit(g, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--stat=100', '--stat-count=40', mergeBase, 'HEAD'], dir) ?? '') : '',
     patchId: mergeBase ? patchId(g, dir, mergeBase, 'HEAD') : null,
-    dateienOk: mergeBase ? tryGit(g, ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) !== null : true,
-    dateien: mergeBase ? (tryGit(g, ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-color', '--no-ext-diff', '--no-textconv', mergeBase, 'HEAD'], dir) ?? '').split('\n').filter(Boolean) : [],
+    dateienOk: mergeBase ? tryGit(g, geaenderteDateienArgs(mergeBase, 'HEAD'), dir) !== null : true,
+    dateien: mergeBase ? (tryGit(g, geaenderteDateienArgs(mergeBase, 'HEAD'), dir) ?? '').split('\n').filter(Boolean) : [],
   };
 }
 
