@@ -99,3 +99,42 @@ test('Plan ohne Pfade, Bauer ändert migrations/: Diff berührt Schutzzone → n
   assert.equal(o?.ok, true); assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2));
   rmSync(wurzel, { recursive: true, force: true });
 });
+
+test('P8: Deckel → zug sieht Abbruch; Unter-Worktree wird erst nach dessen Ende entfernt, danach schreibt der Bauer nicht mehr', async () => {
+  const { wurzel, cwd } = repo(); const dirs: string[] = []; const signale: (AbortSignal | undefined)[] = []; let schriebDanach = false, beendet = 0;
+  const haengt = async (dir: string, _m: string, _p: string, signal?: AbortSignal) => {
+    dirs.push(dir); signale.push(signal);
+    for (let i = 0; i < 60 && !signal?.aborted; i++) { if (!existsSync(dir)) schriebDanach = true; else writeFileSync(join(dir, 'src/a.ts'), zeilen(2)); await new Promise((r) => setTimeout(r, 10)); }
+    await new Promise((r) => setTimeout(r, 40)); beendet++;   // der Abbruch braucht einen Moment (interrupt → Sitzung ruhig)
+    if (!existsSync(dir)) schriebDanach = true;
+    return { ok: false, text: '', grund: 'abgebrochen' };
+  };
+  try {
+    await bestofnStrang({ cwd, id: 'p8', prompt: 'ändere src/a.ts', env: { BRIDGE_BAUER_DECKEL_S: '0.05' }, zug: haengt, pruefe });
+    assert.ok(signale.length >= 2 && signale.every((s) => s?.aborted), 'zug bekam ein abgebrochenes Signal');
+    assert.equal(beendet, signale.length, 'beide Bauer bestätigten den Abbruch');
+    assert.equal(schriebDanach, false, 'kein Schreibzugriff in einen entfernten Worktree');
+    assert.ok(dirs.every((x) => !existsSync(x)), 'Unter-Worktrees entfernt');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('P8: Bauer ignoriert den Abbruch über die Gnadenfrist hinaus → Worktree bleibt, wird erst nach seinem Ende entfernt, nie beschrieben danach', async () => {
+  const { wurzel, cwd } = repo(); const dirs: string[] = []; let schriebDanach = false; const meldungen: string[] = [];
+  let freigabe!: () => void; const tor = new Promise<void>((r) => { freigabe = r; });   // der Test lässt die Bauer enden, keine feste Wartezeit
+  const stur = async (dir: string, _m: string) => {
+    dirs.push(dir); writeFileSync(join(dir, 'src/a.ts'), zeilen(2));
+    await tor;   // ignoriert das Signal
+    if (!existsSync(dir)) schriebDanach = true; else writeFileSync(join(dir, 'src/a.ts'), zeilen(3));
+    return { ok: false, text: '', grund: 'spät' };
+  };
+  try {
+    await bestofnStrang({ cwd, id: 'p8b', prompt: 'ändere src/a.ts', env: { BRIDGE_BAUER_DECKEL_S: '0.05', BRIDGE_ABBRUCH_FRIST_S: '0.05' }, zug: stur, pruefe, status: (t) => meldungen.push(t) });
+    assert.ok(dirs.length >= 2 && dirs.every((x) => existsSync(x)), 'Worktrees stehen noch, solange der Bauer läuft');
+    assert.equal(meldungen.filter((t) => t.includes('Abbruch unbestätigt')).length, dirs.length, 'eine Zeile je Bauer');
+    freigabe();
+    const ende = Date.now() + 10_000;
+    while (dirs.some((x) => existsSync(x)) && Date.now() < ende) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(dirs.every((x) => !existsSync(x)), 'nach dem Ende entfernt');
+    assert.equal(schriebDanach, false);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});

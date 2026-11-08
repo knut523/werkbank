@@ -185,3 +185,15 @@ test('P7: Kind endet mit 0, Enkel hält die Pipe → Rückkehr schnell, ok, Grup
   assert.equal(r.ok, true);
   assert.throws(() => process.kill(Number(readFileSync(join(cwd, 'enkel'), 'utf8')), 0), { code: 'ESRCH' });
 });
+
+// ---- P8: Deckel bricht den Bauer ab (Signal), statt ihn im Hintergrund auslaufen zu lassen -----------------------------------------
+test('P8: Deckel → Signal des Bauers abgebrochen, rennen wartet auf sein Ende', async () => {
+  const signale: AbortSignal[] = []; let beendet = false;
+  const d: Deps = {
+    bauen: (x, _a, o) => new Promise((res) => { signale.push(o!.signal!); setTimeout(() => res({ bauer: x, ok: false, diff: '', log: 'spät' }), 600); o!.signal?.addEventListener('abort', () => setTimeout(() => { beendet = true; res({ bauer: x, ok: false, diff: '', log: 'abgebrochen' }); }, 20)); }),
+    schnell: async () => gruen };
+  const l = await rennen(d, A, { env: { BRIDGE_BAUER_DECKEL_S: '0.05' } });
+  assert.equal(l.zerlegen, true);
+  assert.ok(signale.length >= 2 && signale.every((s) => s.aborted), 'jedes Signal nach dem Deckel abgebrochen');
+  assert.equal(beendet, true, 'Rückkehr erst, nachdem der Bauer den Abbruch bestätigt hat');
+});
