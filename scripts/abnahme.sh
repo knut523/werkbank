@@ -80,6 +80,7 @@ else
     p=$(echo "$out" | sed -n 's/^# pass //p' | tail -1); fl=$(echo "$out" | sed -n 's/^# fail //p' | tail -1); c=$(echo "$out" | sed -n 's/^# cancelled //p' | tail -1)
     if [ $rc -eq 124 ]; then rot "$t: hangs (> ${TMO}s, killed)"
     elif [ $rc -ne 0 ] || [ "${fl:-0}" != 0 ] || [ "${c:-0}" != 0 ]; then rot "$t: rc=$rc pass=${p:-?} fail=${fl:-?} cancelled=${c:-0} (${d}s)"; echo "$out" | grep -E '^not ok|error:' | head -4 | sed 's/^/          /'
+    elif [ "${p:-0}" = 0 ]; then rot "$t: pass=${p:-?} — no test passed (empty file or everything skipped) (${d}s)"
     else ok "$t: pass=$p (${d}s)"; fi
   done
   [ -n "$MP" ] && { kill "$MP" 2>/dev/null; wait "$MP" 2>/dev/null; rm -rf "$TM" "$TM.log"; }
@@ -92,6 +93,11 @@ for f in $(git diff --name-only --diff-filter=M "$BASE" "$HEAD_REF" | grep -E '(
   nd=$((nd+1)); a=$(git show "$BASE:$f" | zaehl); b=$(git show "$HEAD_REF:$f" | zaehl)
   [ "$b" -lt "$a" ] && rot "$f: asserts/test blocks $a → $b"
   git diff -U0 "$BASE" "$HEAD_REF" -- "$f" | grep -E '^\+' | grep -qE '\.(skip|only|todo)\(|\{ *(skip|todo|only) *:' && rot "$f: skip/only/todo marker added"
+done
+# Added test files: no base to compare against, so the markers are searched in the WHOLE file (a new file made of test.skip passes c otherwise).
+for f in $(git diff --name-only --diff-filter=A "$BASE" "$HEAD_REF" | grep -E '(^|/)test/|\.test\.(ts|mjs)$'); do
+  nd=$((nd+1))
+  git show "$HEAD_REF:$f" | grep -qE '\.(skip|only|todo)\(|\{ *(skip|todo|only) *:' && rot "$f: skip/only/todo marker added"
 done
 for f in "${GELOESCHT[@]}"; do istest "$f" && rot "test file deleted: $f"; done
 [ $nd -eq 0 ] && ok "no existing test file changed" || ok "$nd test file(s) checked"
