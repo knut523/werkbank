@@ -12,6 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
+import { budgetAbrechnen } from './kapazitaet.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -313,7 +314,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
       if (!r.ok) return null;
       const j: any = await r.json();
       const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-      return { meliousProzent: n(j.meliousProzent), unterBoden: j.unterBoden === true, claudeFrei: typeof j.claudeFrei === 'boolean' ? j.claudeFrei : null, claudeFreiAb: n(j.claudeFreiAb), prWartend: n(j.prWartend) };
+      return { meliousProzent: n(j.meliousProzent), unterBoden: j.unterBoden === true, claudeFrei: typeof j.claudeFrei === 'boolean' ? j.claudeFrei : null, claudeFreiAb: n(j.claudeFreiAb), prWartend: n(j.prWartend), stand: n(j.stand), topfMax: n(j.topfMax), echt: j.echt === true };
     } : undefined,
     // Jira im Chat geändert → Werkbank zieht die Tickets sofort nach und schiebt die Änderung an offene Boards.
     onJiraWrite: known && INTERNAL ? (keys, tool) => {
@@ -326,7 +327,8 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     } : undefined,
     // Melious (Plan 162): Verbrauch je Versuch an die Werkbank (zählt Tag/Monat, warnt bei 80 %, sperrt bei 100 %).
     onMeliousUsage: known && INTERNAL ? (u, model) => {
-      fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u, model }) }).catch(() => {});
+      fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u, model }) })
+        .then(async (r) => { const j: any = await r.json().catch(() => null); if (typeof j?.energie === 'number') budgetAbrechnen(userId, convId, j.energie); }).catch(() => {});   // Paket D: Abrechnung gegen den Ist-Verbrauch
     } : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });

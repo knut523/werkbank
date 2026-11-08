@@ -4260,7 +4260,7 @@ on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
   const u = await internalUser(req, b);
   const r = await meliousBooking(u, b.usage, b.model);
   log('melious verbrauch', { user: u.id, energie: Math.round(r.energie * 100) / 100, heuteEnergie: r.usage.heute.energie, tempo: r.usage.energie.tempo });
-  send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
+  send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre, energie: r.energie });
 });
 
 // Knut 07.11. („I want more than 8“): Kapazitäts-Lage für die Zulassung neuer Strang-Züge in der Brücke (kapazitaet.ts) —
@@ -4276,6 +4276,7 @@ on('POST', /^\/internal\/kapazitaet$/, async (req, res) => {
   send(res, 200, {
     meliousProzent: typeof fuell === 'number' ? Math.round(fuell * 100) : null, unterBoden: !!use && !!bodenGrund(fuell, !!use.energie?.geschaetzt),
     claudeFrei: konten.length ? luft.frei : null, claudeFreiAb: luft.bis, prWartend: ib ? ib.eintraege.filter((e: any) => e.art === 'push').length : null,
+    stand: typeof use?.energie?.stand === 'number' ? use.energie.stand : null, topfMax: typeof use?.energie?.topfMax === 'number' ? use.energie.topfMax : null, echt: !!use && !use.energie?.geschaetzt,   // Paket D: Anker für das Budget
   });
 });
 

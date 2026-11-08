@@ -4,7 +4,7 @@
 // Passt es nicht: der Zug wartet sichtbar in der Schlange („wartet: RAM/Energie/Kontingent/PR-Stau — …“), kein Fehler.
 // Die Lage kommt von der Werkbank (/internal/kapazitaet), je Person höchstens alle 30 s geholt; ohne Antwort zählt nur der RAM.
 
-export interface Kapazitaet { meliousProzent: number | null; unterBoden: boolean; claudeFrei: boolean | null; claudeFreiAb: number | null; prWartend: number | null }
+export interface Kapazitaet { meliousProzent: number | null; unterBoden: boolean; claudeFrei: boolean | null; claudeFreiAb: number | null; prWartend: number | null; stand?: number | null; topfMax?: number | null; echt?: boolean }
 
 export const prDeckel = (env: Record<string, string | undefined> = process.env) => {
   const n = Math.floor(Number(env.BRIDGE_PR_DECKEL));
@@ -18,10 +18,17 @@ const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/
  * Rein: warum ein Strang-Zug (noch) nicht starten darf, oder '' wenn er darf. `neu` = erster Zug des Strangs (nur dann zählt der
  * PR-Stau — ein laufender Strang soll seinen PR fertig machen können); `bauend` = Profil voll/bauer/release (GLM-Bauer brauchen Energie).
  */
-export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean }, env: Record<string, string | undefined> = process.env): string {
+export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean; userId?: string; jobtyp?: Jobtyp; jetzt?: number }, env: Record<string, string | undefined> = process.env): string {
   if (!k || !kapazitaetAn(env)) return '';
   if (k.claudeFrei === false && o.claude !== false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
-  if (o.bauend && k.unterBoden) return `wartet: Energie — Melious bei ${k.meliousProzent ?? '?'} % (unter der Notgrenze), nachladen`;
+  // Paket D: mit Jobtyp entscheidet das Budget (Eimer, Nachtmodus, Airbag, Breaker) statt der festen Notgrenze; der Anker kommt aus der Lage.
+  const budget = !!o.userId && !!o.jobtyp && budgetAn(env);
+  if (budget) {
+    budgetAnker(o.userId!, { stand: k.stand, echt: k.echt === true, topf: k.topfMax }, o.jetzt ?? Date.now(), env);
+    const g = budgetGrund(o.userId!, o.jobtyp!, o.jetzt ?? Date.now(), env);
+    if (g) return g;
+  }
+  if (o.bauend && k.unterBoden && !budget) return `wartet: Energie — Melious bei ${k.meliousProzent ?? '?'} % (unter der Notgrenze), nachladen`;
   const d = prDeckel(env);
   if (o.neu && k.prWartend !== null && k.prWartend >= d) return `wartet: PR-Stau — ${k.prWartend} PRs warten auf Knuts Go (Deckel ${d}); Sammel-Freigabe auf „Jetzt“`;
   return '';
@@ -50,3 +57,202 @@ export async function kapazitaetLaden(userId: string, laden: (userId: string) =>
 }
 /** Nur für Tests. */
 export const kapazitaetVergessen = () => { lage.clear(); laedt.clear(); };
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Melious-Budget (Werkbank 2.1, Paket D, melious-strategie-0811.md): Token-Bucket statt fester Notgrenze, Vorabbuchung je Jobtyp,
+// Airbag + Breaker (den Schlüssel NIE parken), verankerte Schätzung, Rangfolge 0–5, Nachtmodus, Lese-Kopplung an die Claude-Last,
+// täglicher Abgleich. Alles rein und mit injizierbarer Uhr; Zustand im Speicher je Person. Abschalten: BRIDGE_MELIOUS_BUDGET=aus.
+// Einheit überall: Melious-Energie.
+// ---------------------------------------------------------------------------------------------------------------------------
+type Env = Record<string, string | undefined>;
+export const budgetAn = (env: Env = process.env) => String(env.BRIDGE_MELIOUS_BUDGET ?? '').trim().toLowerCase() !== 'aus';
+const zahl = (v: unknown, d: number, min = 0) => { const s = String(v ?? '').trim(), n = Number(s); return s !== '' && Number.isFinite(n) && n >= min ? n : d; };
+
+export const RANG = { dringend: 0, bauer: 1, pruefung: 2, lesen: 3, zweitmeinung: 4, kosmetik: 5 } as const;
+export type Jobtyp = keyof typeof RANG;
+/** Stand-in für den Median, solange das Ledger zu wenig Läufe hat (Review-Lauf gemessen ~284); gebucht wird immer das Dreifache. */
+export const MEDIAN_VORGABE: Record<Jobtyp, number> = { dringend: 1500, bauer: 1500, pruefung: 300, lesen: 300, zweitmeinung: 400, kosmetik: 100 };
+/** Rang einer Strang-Zug-Art (Profil). Prüfer/Zweitmeinung/Kosmetik kommen über den Aufrufer (jobtyp ausdrücklich). */
+export const jobtypVon = (o: { profil?: string | null; vorrang?: boolean }): Jobtyp =>
+  o.vorrang ? 'pruefung' : o.profil === 'leser' || o.profil === 'schreiber' ? 'lesen' : 'bauer';
+
+export function budgetCfg(env: Env = process.env) {
+  const topf = zahl(env.BRIDGE_MELIOUS_TOPF, 1_024_000, 1);
+  const rate = zahl(env.BRIDGE_MELIOUS_FUELLRATE, 8000);
+  return {
+    rate, burst: zahl(env.BRIDGE_MELIOUS_BURST, 30_000, 1), topf,
+    nachladung: zahl(env.BRIDGE_MELIOUS_NACHLADUNG, 8000),           // echte Nachladung je Stunde (Dashboard)
+    boden: zahl(env.BRIDGE_MELIOUS_BODEN_ENERGIE, topf * 0.05),      // Boden mit echtem Anker: 5 % des Topfs
+    bodenOhneAnker: zahl(env.BRIDGE_MELIOUS_BODEN_OHNE_ANKER, topf * 0.08),
+    pessimismus: zahl(env.BRIDGE_MELIOUS_PESSIMISMUS, 1.2, 1),       // ohne Anker zählt der Verbrauch ×1,2
+    horizontH: zahl(env.BRIDGE_MELIOUS_HORIZONT_H, 24, 1),
+    hochAb: zahl(env.BRIDGE_MELIOUS_HOCH_AB, 0.9), hochFaktor: zahl(env.BRIDGE_MELIOUS_HOCH_FAKTOR, 2, 1),
+    reserve: zahl(env.BRIDGE_MELIOUS_RESERVE, rate),                 // Rang 0: feste Reserve ≈ 1 h Nachladung
+    ankerAlterH: zahl(env.BRIDGE_MELIOUS_ANKER_ALTER_H, 24, 1),
+    lese: { unten: zahl(env.BRIDGE_MELIOUS_LESE_UNTEN, 40), oben: zahl(env.BRIDGE_MELIOUS_LESE_OBEN, 60) },
+  };
+}
+type Cfg = ReturnType<typeof budgetCfg>;
+
+const berlin = (t: number) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(t).map((x) => [x.type, x.value])); return { tag: `${p.year}-${p.month}-${p.day}`, stunde: Number(p.hour) }; };
+/** Nachtmodus 22–06 Uhr (Berlin): nur Rang 0–2. BRIDGE_MELIOUS_NACHT=aus schaltet ihn ab. */
+export const istNacht = (t: number, env: Env = process.env) => String(env.BRIDGE_MELIOUS_NACHT ?? '').trim().toLowerCase() !== 'aus' && (() => { const h = berlin(t).stunde; return h >= 22 || h < 6; })();
+
+interface Buchung { id: string; jobtyp: Jobtyp; betrag: number; aus: 'eimer' | 'reserve'; at: number }
+interface Zustand {
+  eimer: number; eimerAt: number; reserve: number;
+  stand: number | null; standAt: number; echt: boolean; echtAt: number; topf: number;
+  offen: Map<string, Buchung>; ledger: Partial<Record<Jobtyp, number[]>>; verlauf: { at: number; e: number }[];
+  pause: boolean; fehler: number; breakerBis: number; faktor: number; abgleichTag: string; lese: 'claude' | 'melious';
+}
+const zustaende = new Map<string, Zustand>();
+const BUCHUNG_LEBEN_MS = 30 * 60_000;
+export const budgetVergessen = () => { zustaende.clear(); melder = () => {}; leseGlobal = 'melious'; };
+let melder: (userId: string, text: string) => void = () => {};
+/** Meldungen (Airbag, Abgleich) gehen an diese Senke — der Betrieb hängt Log/Ereignis daran. */
+export const budgetMelder = (f: (userId: string, text: string) => void) => { melder = f; };
+
+function zust(userId: string, now: number, c: Cfg): Zustand {
+  let z = zustaende.get(userId);
+  if (!z) zustaende.set(userId, z = { eimer: c.burst, eimerAt: now, reserve: c.reserve, stand: null, standAt: now, echt: false, echtAt: 0, topf: c.topf, offen: new Map(), ledger: {}, verlauf: [], pause: false, fehler: 0, breakerBis: 0, faktor: 1, abgleichTag: '', lese: leseGlobal });
+  return z;
+}
+const echtGilt = (z: Zustand, now: number, c: Cfg) => z.echt && now - z.echtAt < c.ankerAlterH * 3_600_000;
+const bodenFuer = (z: Zustand, now: number, c: Cfg) => (echtGilt(z, now, c) ? c.boden : Math.max(c.boden, c.bodenOhneAnker));
+
+/** Geschätzter Stand abzüglich offener Buchungen (pessimistisch); null = unbekannt. Schreibt die Nachladung fort. */
+function geschaetzterStand(z: Zustand, now: number, c: Cfg): number | null {
+  if (z.stand === null) return null;
+  z.stand = Math.min(z.topf, z.stand + (c.nachladung * Math.max(0, now - z.standAt)) / 3_600_000);
+  z.standAt = now;
+  let offen = 0; for (const b of z.offen.values()) offen += b.betrag;
+  return z.stand - offen;
+}
+
+/** Füllrate des Eimers je Stunde: (Stand − Boden)/Resthorizont, gedeckelt auf die Füllrate (über 90 % Topf: höher). Rein. */
+export function tempoRate(stand: number | null, boden: number, topf: number, c: Cfg, faktor = 1): number {
+  if (stand === null) return (c.rate * faktor) / 2;   // unbekannt: pessimistisch
+  const hoch = stand / topf >= c.hochAb;
+  return Math.max(0, Math.min((stand - boden) / c.horizontH, c.rate * (hoch ? c.hochFaktor : 1) * faktor));
+}
+
+function fuellen(z: Zustand, now: number, c: Cfg, userId = '') {
+  const st = geschaetzterStand(z, now, c);
+  const dt = Math.max(0, now - z.eimerAt) / 3_600_000;
+  z.eimer = Math.min(c.burst, z.eimer + tempoRate(st, bodenFuer(z, now, c), z.topf, c, z.faktor) * dt);
+  z.reserve = Math.min(c.reserve, z.reserve + (c.reserve / 6) * dt);   // Reserve füllt sich in ~6 h wieder
+  z.eimerAt = now;
+  for (const [id, b] of z.offen) if (now - b.at > BUCHUNG_LEBEN_MS) { z.offen.delete(id); if (b.aus === 'reserve') z.reserve = Math.min(c.reserve, z.reserve + b.betrag); else z.eimer = Math.min(c.burst, z.eimer + b.betrag); }   // nie abgerechnet: zurück
+  // Airbag mit Hysterese: Pause unter 2× Boden, Ende ab 2,5× Boden.
+  const s2 = geschaetzterStand(z, now, c), b = bodenFuer(z, now, c);
+  if (s2 !== null) {
+    if (!z.pause && s2 < 2 * b) { z.pause = true; melder(userId, `Melious-Airbag: geschätzter Stand ${Math.round(s2)} unter 2× Boden (${Math.round(2 * b)}) — Melious-Jobs pausieren, bis der Topf sich erholt. Bedarf: Stand im Dashboard prüfen, Anker setzen.`); }
+    else if (z.pause && s2 >= 2.5 * b) z.pause = false;
+  }
+}
+
+/** Anker: echter Stand aus dem Dashboard korrigiert die Schätzung; ohne echten Stand bleibt die eigene (pessimistische) Schätzung. */
+export function budgetAnker(userId: string, o: { stand: number | null | undefined; echt: boolean; topf?: number | null }, now = Date.now(), env: Env = process.env): void {
+  if (!budgetAn(env) || typeof o.stand !== 'number' || !Number.isFinite(o.stand)) return;
+  const c = budgetCfg(env), z = zust(userId, now, c);
+  if (typeof o.topf === 'number' && o.topf > 0) z.topf = o.topf;
+  if (o.echt) { z.stand = Math.min(z.topf, o.stand); z.standAt = now; z.echt = true; z.echtAt = now; }
+  else if (z.stand === null) { z.stand = Math.min(z.topf, o.stand); z.standAt = now; }   // erste Schätzung der Werkbank; danach zählt die eigene Buchführung
+}
+
+const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+/** Gebucht wird das Dreifache des Medians je Jobtyp (Ledger ab 3 Läufen, sonst die Vorgabe). */
+export function buchungsBetrag(z: Pick<Zustand, 'ledger'>, jobtyp: Jobtyp): number {
+  const l = z.ledger[jobtyp] ?? [];
+  return 3 * (l.length >= 3 ? median(l) : MEDIAN_VORGABE[jobtyp]);
+}
+
+export type Zulassung = { ok: true; buchung: string | null; betrag: number; aus?: 'eimer' | 'reserve' } | { ok: false; grund: string; claude?: boolean };
+
+function pruefe(userId: string, jobtyp: Jobtyp, now: number, env: Env): { z: Zustand; c: Cfg; betrag: number; r: Zulassung | null } {
+  const c = budgetCfg(env), z = zust(userId, now, c);
+  fuellen(z, now, c, userId);
+  const rang = RANG[jobtyp], betrag = Math.min(buchungsBetrag(z, jobtyp), c.burst);
+  // Kein Rückfall auf Claude außer Rang 0: die anderen warten (sichtbar), Rang 0 darf ausweichen.
+  const nein = (grund: string): Zulassung => (rang === 0 ? { ok: false, grund, claude: true } : { ok: false, grund });
+  if (rang > 2 && istNacht(now, env)) return { z, c, betrag, r: { ok: false, grund: 'wartet: Nachtmodus 22–06 Uhr — nur Rang 0–2, die Nachladung bleibt im Topf' } };
+  if (z.breakerBis > now) return { z, c, betrag, r: nein(`wartet: Energie-Breaker offen (402) — nächster Versuch ${new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(z.breakerBis)}`) };
+  if (z.pause) return { z, c, betrag, r: nein('wartet: Energie-Airbag — geschätzter Stand unter 2× Boden, Melious pausiert') };
+  if (rang === 0 && z.reserve >= betrag) return { z, c, betrag, r: null };
+  if (z.eimer >= betrag) return { z, c, betrag, r: null };
+  const rate = tempoRate(geschaetzterStand(z, now, c), bodenFuer(z, now, c), z.topf, c, z.faktor);
+  return { z, c, betrag, r: nein(`wartet: Energie-Budget — Eimer ${Math.round(z.eimer)} von ${betrag} nötig (${Math.round(rate)}/h), in ~${rate > 0 ? Math.ceil(((betrag - z.eimer) / rate) * 60) : '?'} min`) };
+}
+
+/** Nur prüfen (für die Schlange, ohne zu buchen): Grund, warum ein Melious-Job jetzt nicht starten darf, sonst ''. */
+export function budgetGrund(userId: string, jobtyp: Jobtyp, now = Date.now(), env: Env = process.env): string {
+  if (!budgetAn(env)) return '';
+  const p = pruefe(userId, jobtyp, now, env);
+  return p.r && !p.r.ok ? p.r.grund : '';
+}
+
+/** Vorabbuchung vor dem Start (Rang 0 aus der festen Reserve, sonst aus dem Eimer). `id` = z. B. die Strang-Kennung. */
+export function budgetBuche(userId: string, id: string, jobtyp: Jobtyp, now = Date.now(), env: Env = process.env): Zulassung {
+  if (!budgetAn(env)) return { ok: true, buchung: null, betrag: 0 };
+  const { z, c, betrag, r } = pruefe(userId, jobtyp, now, env);
+  if (r) return r;
+  const aus = RANG[jobtyp] === 0 && z.reserve >= betrag ? 'reserve' : 'eimer';
+  if (aus === 'reserve') z.reserve -= betrag; else z.eimer -= betrag;
+  const alt = z.offen.get(id); if (alt) { if (alt.aus === 'reserve') z.reserve = Math.min(c.reserve, z.reserve + alt.betrag); else z.eimer = Math.min(c.burst, z.eimer + alt.betrag); }
+  z.offen.set(id, { id, jobtyp, betrag, aus, at: now });
+  return { ok: true, buchung: id, betrag, aus };
+}
+
+/** Abrechnung gegen den Ist-Verbrauch: Differenz zur Buchung zurück (oder nachbelastet), Ledger, Stand ↓ (ohne Anker ×1,2). */
+export function budgetAbrechnen(userId: string, id: string, ist: number, now = Date.now(), env: Env = process.env): void {
+  if (!budgetAn(env) || !(ist >= 0) || !Number.isFinite(ist)) return;
+  const c = budgetCfg(env), z = zust(userId, now, c);
+  fuellen(z, now, c, userId);
+  const b = z.offen.get(id);
+  if (b) {
+    z.offen.delete(id);
+    const diff = b.betrag - ist;
+    if (b.aus === 'reserve') z.reserve = Math.min(c.reserve, z.reserve + diff); else z.eimer = Math.min(c.burst, z.eimer + diff);
+    (z.ledger[b.jobtyp] ??= []).push(ist); if (z.ledger[b.jobtyp]!.length > 30) z.ledger[b.jobtyp]!.shift();
+  } else z.eimer = Math.min(c.burst, z.eimer - ist);   // ohne Buchung: direkt belasten
+  if (z.stand !== null) z.stand -= ist * (echtGilt(z, now, c) ? 1 : c.pessimismus);
+  z.verlauf.push({ at: now, e: ist }); z.verlauf = z.verlauf.filter((v) => now - v.at < 48 * 3_600_000);
+  z.fehler = 0; z.breakerBis = 0;   // ein Lauf kam durch: Breaker zu
+}
+
+/** 402/Energie-Fehler: Breaker mit Backoff (5, 10, 20 … höchstens 120 min). Der Schlüssel bleibt unberührt. */
+export function budgetFehler(userId: string, now = Date.now(), env: Env = process.env): number {
+  if (!budgetAn(env)) return 0;
+  const c = budgetCfg(env), z = zust(userId, now, c);
+  z.fehler += 1;
+  z.breakerBis = now + Math.min(120, 5 * 2 ** (z.fehler - 1)) * 60_000;
+  return z.breakerBis;
+}
+
+/** Kopplung an die Claude-Last mit Hysterese: < unten → Claude liest, > oben → Melious liest, dazwischen unverändert. Rein. */
+export function leseRouting(claudeFuenfH: number | null | undefined, vorher: 'claude' | 'melious', env: Env = process.env): 'claude' | 'melious' {
+  if (typeof claudeFuenfH !== 'number' || !Number.isFinite(claudeFuenfH)) return vorher;
+  const { unten, oben } = budgetCfg(env).lese;
+  return claudeFuenfH < unten ? 'claude' : claudeFuenfH > oben ? 'melious' : vorher;
+}
+let leseGlobal: 'claude' | 'melious' = 'melious';
+/** Zustand der Kopplung nachziehen (vom Ticker mit auslastung().fuenfH). */
+export function leseAktualisieren(claudeFuenfH: number | null | undefined, env: Env = process.env): 'claude' | 'melious' {
+  return leseGlobal = budgetAn(env) ? leseRouting(claudeFuenfH, leseGlobal, env) : 'melious';
+}
+/** Dürfen Lese-Jobs jetzt auf Claude laufen? */
+export const leseAufClaude = (env: Env = process.env) => budgetAn(env) && leseGlobal === 'claude';
+
+/** Täglicher Abgleich ab 08:00 Berlin: Verbrauch der letzten 24 h gegen die Nachladung; darüber → Alarm und Budget −20 %, deutlich darunter +20 %. */
+export function tagesAbgleich(userId: string, now = Date.now(), env: Env = process.env): { lief: boolean; verbrauch?: number; nachladung?: number; faktor?: number } {
+  if (!budgetAn(env)) return { lief: false };
+  const c = budgetCfg(env), z = zustaende.get(userId), b = berlin(now);
+  if (!z || b.stunde < 8 || z.abgleichTag === b.tag) return { lief: false };
+  z.abgleichTag = b.tag;
+  const verbrauch = z.verlauf.filter((v) => now - v.at < 24 * 3_600_000).reduce((s, v) => s + v.e, 0), nachladung = c.nachladung * 24;
+  if (verbrauch > nachladung) { z.faktor = Math.max(0.5, z.faktor * 0.8); melder(userId, `Melious-Abgleich 08:00: Verbrauch ${Math.round(verbrauch)} > Nachladung ${nachladung} — Budget −20 % (Faktor ${z.faktor.toFixed(2)}).`); }
+  else if (verbrauch < nachladung * 0.8) z.faktor = Math.min(1.5, z.faktor * 1.2);
+  return { lief: true, verbrauch, nachladung, faktor: z.faktor };
+}
+/** Ticker-Aufruf (sessions.ts, 60 s): Abgleich für alle bekannten Personen. */
+export const budgetTick = (now = Date.now(), env: Env = process.env) => { for (const u of zustaende.keys()) tagesAbgleich(u, now, env); };

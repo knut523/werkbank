@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 // Audit 05.11. (3): eigener Topf für jcode-Stränge (eigene Reihe — sie warten nicht hinter Claude-Zügen, die auf Speicher warten);
 // Wartegrund am Platz (sichtbar in /orch/state); Schlange auf Platte (BRIDGE_STATE_DIR/schlange.json): nach Neustart oder
 // Zeitdeckel bekommt ein Zug, der wiederkommt (automatisches Fortsetzen der Werkbank), seinen alten Platz zurück.
-export interface Platz { key: string; userId: string; since: number; vorrang: boolean; topf?: string; grund?: string; gehalten?: boolean }
+export interface Platz { key: string; userId: string; since: number; vorrang: boolean; topf?: string; grund?: string; gehalten?: boolean; rang?: number }
 
 const schlange: Platz[] = [];
 /** Gemerkte Plätze (key → since) von Zügen, die die Schlange ohne Start verlassen haben oder vor einem Neustart warteten. */
@@ -31,7 +31,7 @@ export function merkeIn(pfad: string | null): void {
 function speichern(): void {
   if (!datei) return;
   try {
-    writeFileSync(datei + '.tmp', JSON.stringify({ plaetze: schlange.map(({ key, userId, since, vorrang, topf, grund }) => ({ key, userId, since, vorrang, topf, grund })), frueher: [...frueher].filter(([, v]) => v.bis > Date.now()).slice(-200).map(([key, v]) => ({ key, ...v })) }));
+    writeFileSync(datei + '.tmp', JSON.stringify({ plaetze: schlange.map(({ key, userId, since, vorrang, topf, grund, rang }) => ({ key, userId, since, vorrang, topf, grund, rang })), frueher: [...frueher].filter(([, v]) => v.bis > Date.now()).slice(-200).map(([key, v]) => ({ key, ...v })) }));
     renameSync(datei + '.tmp', datei);
   } catch { /* Platte voll o. ä.: die Schlange im Speicher läuft weiter */ }
 }
@@ -50,6 +50,8 @@ export function reihe(q: readonly Platz[], userId: string, topf?: string, jetzt:
   return q.filter((p) => p.userId === userId && (p.topf ?? '') === (topf ?? '')).sort((a, b) =>
     // Pass B (07.11.): wer nur aus eigenem Grund wartet (PR-Stau, Energie, Kontingent — kapazitaet.ts), hält die anderen nicht auf.
     Number(!!a.gehalten) - Number(!!b.gehalten) ||
+    // Paket D: Melious-Rangfolge 0 dringend … 5 Kosmetik (kapazitaet.ts RANG); ohne Rang gleich — innerhalb eines Rangs gilt Alter/Vorrang wie bisher. BRIDGE_MELIOUS_BUDGET=aus: kein Rang.
+    (rangAn() ? (a.rang ?? 1) - (b.rang ?? 1) : 0) ||
     Number(b.since <= altertAb) - Number(a.since <= altertAb)   // gealterte Züge zuerst (negativ = a vorn)
     || (a.since <= altertAb ? 0 : Number(b.vorrang) - Number(a.vorrang))   // sonst Vorrang
     || a.since - b.since);
@@ -62,6 +64,7 @@ export function position(q: readonly Platz[], key: string, jetzt: number = Date.
   return reihe(q, p.userId, p.topf, jetzt).findIndex((x) => x.key === key) + 1;
 }
 
+const rangAn = () => String(process.env.BRIDGE_MELIOUS_BUDGET ?? '').trim().toLowerCase() !== 'aus';
 export const schlangeAn = () => process.env.BRIDGE_QUEUE !== '0';
 export const maxWarteMs = () => { const m = Number(process.env.BRIDGE_QUEUE_MAX_MIN || 45); return Number.isFinite(m) ? Math.max(60_000, m * 60_000) : 45 * 60_000; };
 

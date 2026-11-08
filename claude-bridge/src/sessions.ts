@@ -35,7 +35,8 @@ import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
-import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, type Kapazitaet } from './kapazitaet.ts';
+import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
+import { auslastung as claudeAuslastung } from './auslastung.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -486,7 +487,8 @@ export function reapIdle(now = Date.now()): number {
   }
   return victims.length;
 }
-setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
+budgetMelder((user, text) => log('melious-budget', { user, text }));   // Airbag/Abgleich: Ereignis im Log (Meldung an Knut über die Schlange: „wartet: Energie …“)
+setInterval(() => { try { budgetTick(); if (budgetAn()) claudeAuslastung().then((a) => leseAktualisieren(a.fuenfH)).catch(() => {}); } catch { /* egal */ } try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
 
 const STARTED_AT = Date.now();
 /** R31 (werkbank_stand): Wertklassen der Schalter dieses Prozesses — aufgezählte Werte bleiben, alles andere heißt „gesetzt“. */
@@ -1503,7 +1505,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Pass B (07.11.): „neu“ = noch kein Zug (sessionMap leert sich bei jcode und Phasenwechsel); Kontingent nur für Stränge auf Claude.
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
-    claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber' };
+    claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber',
+    // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
+    ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { userId: req.userId, jobtyp: jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
@@ -1526,7 +1530,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const grund0 = lockGrund, warteAb = Date.now();   // Runde 7 B (Plan §22): Grund und Dauer der Wartezeit fürs Log
     // K3: lockGrund gilt für den letzten Aufruf (auch eines anderen Wartenden, z. B. jcode-Topf) — je Wartendem den eigenen merken
     let meinGrund = grund0;
-    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
+    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(kapOpt.jobtyp ? { rang: RANG[kapOpt.jobtyp] } : {}), ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
       frei: () => { if (lives.has(key)) return false; const r = zulassen(lockFor(meine(), { readonly: !!req.readonly, mode }, box())); meinGrund = lockGrund; return r === 'ok'; },
       grund: () => meinGrund || 'gerade kein Platz',
       gehalten: () => !!kapGrund(),
@@ -1581,6 +1585,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     oldest.abort.abort();
     end(oldest);
   }
+
+  // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
+  if (kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
 
   // 3) Neuer Zug.
   const live: Live = {
@@ -2009,7 +2016,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           continue;
         }
         if (!live.rateLimited || live.abort.signal.aborted) break;
-        markExhausted(user, acct, live.rateLimited.resetsAt);
+        // Paket D: 402/Energie bei Melious → Breaker mit Backoff, der Schlüssel wird NICHT geparkt (06.11.: geparkter Schlüssel ließ die Stränge stehen).
+        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(user);
+        else markExhausted(user, acct, live.rateLimited.resetsAt);
         if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
           const list = await ladeKonten();
@@ -2410,6 +2419,7 @@ Ladezeit, Texte, Fehler und die Pfade der Bildschirmfotos — nenne sie im Ergeb
 
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
+  if (d.rolle === 'leser' && leseAufClaude()) return null;   // Paket D: Claude-5h kühl (< 40 %) → Lese-Jobs auf Claude
   const e = orchMap[d.workerKey];
   if (e?.wantMel === false) return null;
   let mel: Account | undefined;
