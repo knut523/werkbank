@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -3057,7 +3057,7 @@ export function pruefSchluessel(of: Deleg | undefined, kommentare = 0): string |
 }
 
 /** Prüfer für eine fertige Bauer-/Schreiber-Delegation: Modell ≠ Autor, Klasse ≥ Autor; keiner frei → „ungeprüft“ (kein stiller Ersatz). */
-async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = ''): Promise<Deleg | null> {
+async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = '', vorPush = false): Promise<Deleg | null> {
   const autor = of.modell ?? '';
   // Der Geprüfte selbst zählt nicht (er wartet nur noch auf seinen Prüfer).
   const voll = () => runningOf(of.parent).filter((x) => x !== of).length >= KAPPUNG.maxWorker || laufend() - (of.status === 'laeuft' ? 1 : 0) >= maxWorkers();
@@ -3069,9 +3069,10 @@ async function startPruefer(of: Deleg, risiko: Risiko = 'hoch', hinweis = ''): P
   if (!cand) return kein(`ungeprüft (kein Prüfer ≥ Autor-Klasse ${klasse(autor)} frei) — Lead prüft selbst; \`challenge\` ist kein Ersatz, wenn der Autor GLM 5.3 ist`);
   if (voll()) return kein(`Prüfer nicht gestartet (Worker-Grenze erreicht) — Lead prüft selbst`);   // nach dem await erneut (kein Wettlauf)
   if (!lives.get(of.parent)?.req) return kein('Prüfer nicht gestartet (Lead-Zug zu Ende) — Lead prüft selbst');   // Re-Review F4
-  const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, `Prüfe die Arbeit der Delegation ${of.id} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.${hinweis ? `\n\nHinweis des Leads: ${hinweis}` : ''}`, of.wt?.dir ?? of.cwd, of.req);
+  const d = newDeleg(of.userId, of.parent, of.parentConv, 'pruefer', risiko, pruefAuftrag({ ofId: of.id, runde: rundeStand(of.parent).runde + 1, vorPush, deltaVon: rundeStand(of.parent).kopf, hinweis }), of.wt?.dir ?? of.cwd, of.req);
   d.pruefe = of.id;
   of.pruefer = d.id;
+  rundeVermerken(of.parent, of.git?.kopf ?? null);
   // Claude-Rückfall nur, wenn Sonnet selbst die Bedingung erfüllt (≠ Autor, Klasse ≥ Autor).
   const sonnetOk = klasse('sonnet') >= klasse(autor) && familie(autor) !== 'sonnet';
   registerWorker(d, cand.anbieter === 'melious' ? { profil: 'leser', modell: `melious:${cand.modell}`, workerClaude: 'sonnet', noClaude: !sonnetOk } : { profil: 'leser', modell: 'melious:auto', workerClaude: 'sonnet', wantMel: false });
@@ -3126,7 +3127,7 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
     // B3: gleicher Stand schon geprüft → vorhandenes Urteil wiederverwenden, keinen zweiten Prüfer starten.
     const vorhanden = (() => { const sk = pruefSchluessel(of, Number((b as any).kommentare) || 0); return sk ? urteilZu(sk) : undefined; })();
     if (vorhanden) return { ok: true, text: `Derselbe Stand (Kopf, Basis, Kommentare) ist schon geprüft (Prüfer ${vorhanden.von}): Urteil ${vorhanden.urteil}${vorhanden.befunde.length ? `\n${vorhanden.befunde.join('\n')}` : ''}\nWiederverwendet, kein neuer Prüfer gestartet.` };
-    const pr = await startPruefer(of, risiko, aufgabe);
+    const pr = await startPruefer(of, risiko, aufgabe, (b as any).vorPush === true);
     if (!pr) return { ok: true, text: `Kein Prüfer gestartet: ${of.hinweis}` };
     return { ok: true, id: pr.id, text: `Prüfer ${pr.id} für ${of.id} gestartet (Modell ≠ Autor, Klasse ≥ Autor). Ergebnis mit delegation_stand.` };
   }

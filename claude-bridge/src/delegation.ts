@@ -74,6 +74,24 @@ export function urteilMerken(schluessel: string, u: Urteil): void {
 export const urteilZu = (schluessel: string, env: Record<string, string | undefined> = process.env): Urteil | undefined => (dedupeAn(env) ? urteile.get(schluessel) : undefined);
 export const urteileLeeren = () => urteile.clear();
 
+// ---------- Runden: ab Runde 2 nur Delta und nur Blocker (Wave 21 B4) ----------
+
+export const PRUEF_FORMAT = 'Ausgabeformat: Urteil (ok|maengel|falsch) + Befunde als `datei:zeile — Schwere (blocker|hoch|mittel|niedrig)`, je Befund eine Zeile, keine Prosa.';
+const runden = new Map<string, { runde: number; kopf: string | null }>();
+/** Bisherige Prüfrunden eines Strangs (Zahl, Kopf der letzten geprüften Fassung). */
+export const rundeStand = (parent: string) => runden.get(parent) ?? { runde: 0, kopf: null };
+export const rundeVermerken = (parent: string, kopf: string | null) => { runden.set(parent, { runde: rundeStand(parent).runde + 1, kopf }); };
+export const rundenLeeren = () => runden.clear();
+/** Auftrag des Prüfers: Runde 1 und „vor Push“ voll, ab Runde 2 nur das Delta seit der letzten Runde und nur Blocker (BRIDGE_PRUEF_DELTA=aus → immer voll). */
+export function pruefAuftrag(o: { ofId: string; runde: number; vorPush?: boolean; deltaVon?: string | null; hinweis?: string }, env: Record<string, string | undefined> = process.env): string {
+  const basis = `Prüfe die Arbeit der Delegation ${o.ofId} gegen ihren Auftrag: Korrektheit, Randfälle, entfernte Invarianten, Sicherheit. Ändere nichts.`;
+  const delta = env.BRIDGE_PRUEF_DELTA !== 'aus' && o.runde >= 2 && !o.vorPush;
+  const art = delta
+    ? `Runde ${o.runde}: NUR das Delta${o.deltaVon ? ` (git diff ${o.deltaVon.slice(0, 12)}..HEAD)` : ' seit deiner letzten Prüfung'} und NUR Blocker (Schwere blocker/hoch); keine Nits, keine Wiederholung alter Punkte außer „noch offen“. Kein voller Durchgang — der kommt vor dem Push.`
+    : o.vorPush ? 'Voller Durchgang vor dem Push: der ganze Diff, alle Schweregrade.' : `Runde ${Math.max(1, o.runde)}: voller Durchgang.`;
+  return `${basis}\n${art}\n${PRUEF_FORMAT}${o.hinweis ? `\n\nHinweis des Leads: ${o.hinweis}` : ''}`;
+}
+
 // ---------- Abschluss-Block ----------
 
 export interface Abschluss { ziel: boolean; dateien: string[]; pruefungen: { befehl: string; ausgabe: string }[]; annahmen: string[]; widersprueche: string[]; urteil?: 'ok' | 'maengel' | 'falsch'; befunde?: string[] }

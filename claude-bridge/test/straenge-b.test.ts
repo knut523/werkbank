@@ -37,3 +37,19 @@ test('B3: gleicher Schlüssel (head, base, Kommentare) → vorhandenes Urteil; a
   assert.equal(urteilZu(reviewSchluessel({ headSha: 'a2', baseSha: 'b1', kommentare: 2 })), undefined, 'neuer Kopf → neu');
   assert.equal(urteilZu(k, { BRIDGE_REVIEW_DEDUPE: 'aus' }), undefined);
 });
+
+import { pruefAuftrag, rundeStand, rundeVermerken, rundenLeeren, PRUEF_FORMAT } from '../src/delegation.ts';
+
+test('B4: Runde 1 und „vor Push“ voll; ab Runde 2 nur Delta und nur Blocker; festes Ausgabeformat; Schalter aus = voll', () => {
+  rundenLeeren();
+  assert.equal(rundeStand('p').runde, 0);
+  const r1 = pruefAuftrag({ ofId: 'd-1', runde: 1 });
+  assert.match(r1, /Runde 1: voller Durchgang/); assert.ok(r1.includes(PRUEF_FORMAT)); assert.match(r1, /datei:zeile/);
+  rundeVermerken('p', 'abc1234567890');
+  assert.deepEqual(rundeStand('p'), { runde: 1, kopf: 'abc1234567890' });
+  const r2 = pruefAuftrag({ ofId: 'd-2', runde: 2, deltaVon: rundeStand('p').kopf });
+  assert.match(r2, /NUR das Delta \(git diff abc123456789\.\.HEAD\) und NUR Blocker/);
+  assert.match(pruefAuftrag({ ofId: 'd-2', runde: 3, vorPush: true }), /Voller Durchgang vor dem Push/);
+  assert.match(pruefAuftrag({ ofId: 'd-2', runde: 2 }, { BRIDGE_PRUEF_DELTA: 'aus' }), /voller Durchgang/);
+  assert.match(pruefAuftrag({ ofId: 'd-2', runde: 1, hinweis: 'achte auf X' }), /Hinweis des Leads: achte auf X/);
+});
