@@ -219,3 +219,11 @@ test('Schutzpfade: repoFakten liefert Nicht-ASCII-Namen unquotiert (auth/ü.ts t
   const { schutzTreffer } = await import('../server/schutzpfade.ts');
   assert.equal(schutzTreffer(f.dateien).length, 2);
 });
+
+test('strandRepo: fehlt ~/work ganz (frisches/Wegwerf-HOME), ist das ein 409 mit klarem Text, kein 500', () => {
+  const alt = process.env.HOME; const leerHome = mkdtempSync(join(tmpdir(), 'home-ohne-work-'));
+  process.env.HOME = leerHome;
+  try {
+    assert.throws(() => F.strandRepo({ cwd: '/tmp' }), (e: any) => e.status === 409 && /nicht unter ~\/work/.test(e.message));
+  } finally { process.env.HOME = alt; }
+});

@@ -76,7 +76,8 @@ export function repoFakten(dir: string, g: GitFn = git): RepoFakten {
 export function strandRepo(d: any): string {
   let real: string;
   try { real = realpathSync(String(d.cwd ?? '')); } catch { throw err(409, 'Arbeitsordner des Strangs gibt es nicht mehr.'); }
-  const work = realpathSync(join(process.env.HOME || homedir(), 'work'));
+  let work: string;   // fehlt ~/work ganz (frisches HOME): der Ordner liegt jedenfalls nicht darunter → 409, kein 500
+  try { work = realpathSync(join(process.env.HOME || homedir(), 'work')); } catch { throw err(409, 'Arbeitsordner liegt nicht unter ~/work (den Ordner ~/work gibt es nicht).'); }
   if (!real.startsWith(work + '/')) throw err(409, 'Arbeitsordner liegt nicht unter ~/work.');
   return real;
 }
