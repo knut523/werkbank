@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { aktualisiere } from './claudebudget.ts';
 
 export type Stufe = 'gruen' | 'gelb' | 'rot' | 'unbekannt';
 export interface Auslastung { stufe: Stufe; fuenfH: number | null; siebenT: number | null; vorPlan: boolean; reset: string | null; konto: string | null; freieKonten: number; grund: string | null }
@@ -55,7 +56,7 @@ export async function auslastung(now = Date.now()): Promise<Auslastung> {
     ? { stufe: 'unbekannt', fuenfH: null, siebenT: null, vorPlan: false, reset: null, konto: null, freieKonten: 0, grund: 'cswap nicht installiert' }
     : await new Promise<Auslastung>((res) => execFile(bin, ['list', '--json'], { timeout: 20_000, maxBuffer: 1 << 20 }, (err, out) => {
       if (err) return res({ stufe: 'unbekannt', fuenfH: null, siebenT: null, vorPlan: false, reset: null, konto: null, freieKonten: 0, grund: 'cswap ohne Antwort' });
-      try { res(auslastungAus(JSON.parse(String(out)), { gelb: Number(process.env.MELIOUS_GELB) || 60, rot: Number(process.env.MELIOUS_ROT) || 85 })); }
+      try { const j = JSON.parse(String(out)); aktualisiere(j); res(auslastungAus(j, { gelb: Number(process.env.MELIOUS_GELB) || 60, rot: Number(process.env.MELIOUS_ROT) || 85 })); }
       catch { res({ stufe: 'unbekannt', fuenfH: null, siebenT: null, vorPlan: false, reset: null, konto: null, freieKonten: 0, grund: 'cswap-Ausgabe unlesbar' }); }
     }));
   cache = { at: now, wert };

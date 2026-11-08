@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 // Passt es nicht: der Zug wartet sichtbar in der Schlange („wartet: RAM/Energie/Kontingent/PR-Stau — …“), kein Fehler.
 // Die Lage kommt von der Werkbank (/internal/kapazitaet), je Person höchstens alle 30 s geholt; ohne Antwort zählt nur der RAM.
 
+import { claudeBudgetGrund } from './claudebudget.ts';
+
 export interface Kapazitaet { meliousProzent: number | null; unterBoden: boolean; claudeFrei: boolean | null; claudeFreiAb: number | null; prWartend: number | null; stand?: number | null; topfMax?: number | null; echt?: boolean }
 
 export const prDeckel = (env: Record<string, string | undefined> = process.env) => {
@@ -19,9 +21,11 @@ const uhr = (t: number) => new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/
  * Rein: warum ein Strang-Zug (noch) nicht starten darf, oder '' wenn er darf. `neu` = erster Zug des Strangs (nur dann zählt der
  * PR-Stau — ein laufender Strang soll seinen PR fertig machen können); `bauend` = Profil voll/bauer/release (GLM-Bauer brauchen Energie).
  */
-export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean; userId?: string; jobtyp?: Jobtyp; jetzt?: number }, env: Record<string, string | undefined> = process.env): string {
+export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend: boolean; claude?: boolean; userId?: string; jobtyp?: Jobtyp; jetzt?: number } & Parameters<typeof claudeBudgetGrund>[0], env: Record<string, string | undefined> = process.env): string {
   if (!k || !kapazitaetAn(env)) return '';
   if (k.claudeFrei === false && o.claude !== false) return `wartet: Kontingent — kein Claude-Konto frei${k.claudeFreiAb ? ` (wieder ab ${uhr(k.claudeFreiAb)})` : ''}`;
+  // Paket E: Claude-Budget je Konto (Eimer, Wand, Tempo, Hauptchat-Tag) — nur für Läufe auf Claude.
+  const cb = claudeBudgetGrund(o, o.jetzt ?? Date.now(), env); if (cb && o.claude !== false) return cb;
   // Paket D: mit Jobtyp entscheidet das Budget (Eimer, Nachtmodus, Airbag, Breaker) statt der festen Notgrenze; der Anker kommt aus der Lage.
   const budget = !!o.userId && !!o.jobtyp && budgetAn(env);
   if (budget) {
