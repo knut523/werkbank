@@ -12,7 +12,7 @@ import { fragenAus, empfohlenBeantwortbar, type Frage } from './entscheidungssei
 import { themaOf } from './themen.ts';
 import { inboxZahl, type InboxEintrag } from './inbox.ts';
 import { fragenJeStrang } from './chatstatus.ts';
-import { v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, prKurz, repoKurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
+import { prozessZeile, bruckenSchluessel, v2FreigabeAn, auszugUm, knutOffenJe, strangZuPr, jetztSatz, schritteAus, standZeile, bezugIds, standVoll, verlangtVon, kurzurteil, themenUebersicht, themaVon, chatListe, rolle, jetztAuswahl, karteAusFrage, antwortWeg, zustandSatz, arbeitGruppe, erledigtSicht, prSicht, personen, uhrzeit, kurz, prKurz, repoKurz, type ArbeitZeile, type LivePrLite, type V2Karte } from './v2kern.ts';
 import * as eigen from './v2chat.ts';
 import { dodAus, fastFertig, endenAus, hauptsitzungPunkte } from './dod.ts';
 import { triageAn, councilWirkung, type Council, type CouncilUrteil } from './stufe.ts';
@@ -630,11 +630,15 @@ export function registerV2(on0: On, d: V2Deps) {
     // Ergebnisse, berührt, Modell/Laufzeit. Quelle: was Brücke und Strang schon melden (Zustand, Stand-Block, Bericht-Kopf).
     const s = d.zustaende && doc.conv ? (await d.zustaende(u).catch(() => null))?.get(String(doc.conv)) ?? null : null;
     const kopf: any = doc.berichtKopf ?? null;
+    // R12b: die laufenden Prozesse dieses Strangs (eine Abfrage je Aufruf; jeder Fehler → null, die Seite bleibt heil).
+    const prozesse = doc.conv ? await fetch(`${d.bridgeUrl}/internal/prozesse?user=${encodeURIComponent(u.id)}`, { headers: { 'x-werkbank-internal': process.env.WERKBANK_INTERNAL_TOKEN ?? '' }, signal: AbortSignal.timeout(4000) })
+      .then(async (r) => (r.ok ? prozessZeile(await r.json(), bruckenSchluessel(u.id, String(doc.conv)), Date.now(), Number(process.env.BRIDGE_WAECHTER_GNADE_S) || 60) : null)).catch(() => null) : null;
     const auftrag = String(doc.zielLine || String(doc.prompt ?? '').split('\n').map((l: string) => l.replace(/^[#>*\s-]+/, '').trim()).find((l: string) => l.length > 15) || doc.title || '');
     const gh: any[] = Array.isArray(kopf?.github) ? kopf.github : [];
     const steckbrief = {
       wofuer: kurz(auftrag.replace(/\s+/g, ' '), 220), gestartet: doc.startedAt ?? null, ueber: doc.lauf ?? null,
       // Konzept J, J1: wer den Unter-Chat ausführt und warum (sichtbar); fiel jcode auf Claude zurück, steht das hier.
+      prozesse,
       laeufer: doc.laeufer === 'jcode' || doc.laeufer === 'oc2' ? { wer: s?.laeuferFallback ? `Claude (${doc.laeufer === 'oc2' ? 'opencode 2' : 'jcode'} lieferte nichts)` : doc.laeufer === 'oc2' ? 'opencode 2 (Melious, Claude-Gate)' : 'jcode (Melious)', grund: s?.laeuferFallback?.grund ?? doc.laeuferGrund ?? null } : null,
       jetzt: s?.running ? (jetztSatz(s.jetzt) ?? standZeile(stand, 'Jetzt') ?? 'arbeitet gerade') : s?.queued ? `wartet in der Schlange (Platz ${s.queued.pos}) und startet von selbst` : standZeile(stand, 'Jetzt'),
       laeuft: !!s?.running, seit: s?.running ? s?.turn?.start ?? null : null,
