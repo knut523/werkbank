@@ -2,7 +2,7 @@
 // auf demselben Plan, je im eigenen Worktree. Schutzzonen → Opus, ein Bauer. Die Auswahl braucht kein Claude: Schnellprüfung (tsc/lint/Tests),
 // Tamper-Guard, dann kleinerer Diff, Gleichstand → glm-flash. Voller Build/Tests nur am Sieger. Alles Äußere (Bauen, Prüfen, Ledger) wird injiziert.
 // Abschalten: BRIDGE_BESTOFN=aus (oder automatisch: Zweitbauer gewinnt < 15 % nach 30 Läufen).
-import { exec } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { FLASH, DEEPSEEK, GLM } from './modellwahl.ts';
@@ -123,9 +123,22 @@ export class Semaphor {
   }
 }
 export const pruefSemaphor = new Semaphor();
-/** Hilfs-Prüfer für die Praxis: Befehl im Worktree, grün bei Exit 0; läuft über den Semaphor. */
-export const shellPruefung = (cwd: string, befehl: string, sem = pruefSemaphor) => sem.run(() => new Promise<{ ok: boolean; log: string }>((res) =>
-  exec(befehl, { cwd, timeout: 15 * 60_000, maxBuffer: 8 << 20 }, (e, so, se) => res({ ok: !e, log: (String(so) + String(se)).slice(-4000) }))));
+/** Gruppen-Kill; ESRCH/EPERM = Gruppe schon weg, kein Fehler. */
+export const groupKill = (pid: number) => { try { process.kill(-pid, 'SIGKILL'); } catch { /* Gruppe schon tot */ } };
+/** Hilfs-Prüfer: Befehl ohne Shell (Argumentliste) in eigener Prozessgruppe im Worktree, grün bei Exit 0; Timeout und Ende töten die ganze Gruppe; über den Semaphor. */
+export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { sem?: Semaphor; timeoutMs?: number } = {}) => (o.sem ?? pruefSemaphor).run(() => new Promise<{ ok: boolean; log: string }>((res) => {
+  let log = '', fertig = false;
+  const kind = spawn(cmd, args, { cwd, detached: true, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const an = (d: Buffer) => { log = (log + d).slice(-8000); };
+  kind.stdout.on('data', an); kind.stderr.on('data', an);
+  const ende = (ok: boolean, zusatz = '') => { if (fertig) return; fertig = true; clearTimeout(t); if (kind.pid) groupKill(kind.pid); res({ ok, log: (log + zusatz).slice(-4000) }); };
+  let zeit = false;
+  const t = setTimeout(() => { zeit = true; if (kind.pid) groupKill(kind.pid); }, o.timeoutMs ?? 15 * 60_000); // Ergebnis erst bei 'close': Kind ist dann abgeholt, kein Zombie in der Gruppe
+  kind.on('error', (e) => ende(false, String(e)));
+  let rc: number | null = null;
+  kind.on('exit', (code) => { rc = code; if (kind.pid) groupKill(kind.pid); }); // Enkel mit geerbter Pipe würde 'close' sonst bis zum Timeout aufhalten
+  kind.on('close', (code) => ende((rc ?? code) === 0 && !zeit, zeit ? '\n[Timeout]' : ''));
+}));
 
 // ---- Statistik und Abschaltregel ---------------------------------------------------------------------------------------------------
 export interface Statistik { laeufe: number; zweitSiege: number }

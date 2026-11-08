@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, bauerDeckelMs, diffGroesse, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
+import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, bauerDeckelMs, diffGroesse, pruefLauf, groupKill, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
 const gruen: Schnell = { tsc: true, lint: true, tests: true };
@@ -155,4 +158,30 @@ test('Zeitdeckel: nur ein Bauer zu langsam → der schnelle siegt (ohne Deckel g
   assert.equal(l.sieger?.bauer, FLASH); assert.equal(!!l.zerlegen, false);
   assert.equal(d.aufrufe.includes(GLM), false);
   assert.equal(diffGroesse(l.sieger!.diff), 6);
+});
+
+// ---- P7: Prüflauf ohne Shell, eigene Prozessgruppe ----
+test('P7: Dateiname mit $(…) wird nicht von einer Shell ausgeführt', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'p7-'));
+  await pruefLauf(cwd, 'node', ['--test', 'x$(touch PWNED).test.ts']);
+  assert.equal(existsSync(join(cwd, 'PWNED')), false);
+});
+test('P7: Timeout tötet die ganze Gruppe (Enkel sleep 600)', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'p7-'));
+  const r = await pruefLauf(cwd, 'sh', ['-c', 'sleep 600 & echo $$ > pgid; echo $! > enkel; wait'], { timeoutMs: 2000 });
+  assert.equal(r.ok, false);
+  const enkel = Number(readFileSync(join(cwd, 'enkel'), 'utf8'));
+  assert.throws(() => process.kill(enkel, 0), { code: 'ESRCH' });
+  assert.throws(() => process.kill(-Number(readFileSync(join(cwd, 'pgid'), 'utf8')), 0), { code: 'ESRCH' });
+});
+test('P7: Kill einer toten Gruppe wirft nicht', () => {
+  assert.doesNotThrow(() => groupKill(2 ** 22 - 1));
+});
+test('P7: Kind endet mit 0, Enkel hält die Pipe → Rückkehr schnell, ok, Gruppe tot', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'p7-'));
+  const t0 = Date.now();
+  const r = await pruefLauf(cwd, 'sh', ['-c', 'sleep 600 & echo $! > enkel; echo $$ > pgid; exit 0'], { timeoutMs: 30000 });
+  assert.ok(Date.now() - t0 < 3000, `dauerte ${Date.now() - t0} ms`);
+  assert.equal(r.ok, true);
+  assert.throws(() => process.kill(Number(readFileSync(join(cwd, 'enkel'), 'utf8')), 0), { code: 'ESRCH' });
 });
