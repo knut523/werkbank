@@ -218,3 +218,26 @@ test('Vorabbuchung ohne Abrechnung wird beim Zugende freigegeben (sonst hängt d
   for (let i = 0; i < 50; i++) { k.budgetBuche(u, 'k' + i, 'bauer', 1_000, env); k.budgetFreigeben(u, 'k' + i, 1_000, env); }
   assert.equal(k.budgetBuche(u, 'neu', 'bauer', 1_000, env).ok, true);
 });
+
+test('Buchung und Abrechnung unter derselben Kennung: der server-Pfad trifft die Vorabbuchung, das Ledger füllt sich', async () => {
+  process.env.BRIDGE_STATE_DIR = mkdtempSync(join(tmpdir(), 'budget-kennung-'));
+  const m = await import('../src/sessions.ts');
+  const env = {} as any;
+  const u = 'kennung-u';
+  const convs = ['2693e0a8-1f0e-4a19-9d1e-2f4b6c8d0a11', 'unterhaltung/2', '2693e0a8-1f0e-4a19-9d1e-2f4b6c8d0a13'];
+  k.budgetVergessen();
+  const key = m.sitzungsKey(u, convs[0]);
+  assert.ok(key.startsWith(u + ':') && key !== convs[0], 'Kennung = Nutzer + Unterhaltung (nicht die nackte Unterhaltung)');
+  // Drei Züge: Vorabbuchung mit dem Sitzungs-Schlüssel, Abrechnung über denselben (server.ts: onMeliousUsage).
+  for (const [i, ist] of [500, 600, 700].entries()) {
+    const b = k.budgetBuche(u, m.sitzungsKey(u, convs[i]), 'pruefung', TAG, env);
+    assert.deepEqual([b.ok, b.betrag], [true, 900], 'unter 3 Läufen: 3 × Vorgabe 300');
+    k.budgetAbrechnen(u, m.sitzungsKey(u, convs[i]), ist, TAG, env);
+  }
+  const nach = k.budgetBuche(u, 'nach-1', 'pruefung', TAG, env);
+  assert.deepEqual([nach.ok && nach.betrag], [1800], 'alle drei Buchungen gefunden: Ledger (500, 600, 700) → 3 × Median 600');
+  // Die Buchung ist verbraucht: eine zweite Abrechnung derselben Kennung kommt ohne Buchung an und füllt das Ledger nicht.
+  k.budgetAbrechnen(u, m.sitzungsKey(u, convs[2]), 5, TAG, env);
+  const nach2 = k.budgetBuche(u, 'nach-2', 'pruefung', TAG, env);
+  assert.deepEqual([nach2.ok && nach2.betrag], [1800], 'verbraucht: 5 zählt nicht mehr als Buchung, Median bleibt 600');
+});

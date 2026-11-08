@@ -699,6 +699,9 @@ export function safeId(s: string): string {
   return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
 }
 
+/** Kennung einer Unterhaltung: Buchung beim Zug-Start (hier) und Abrechnung gegen den Ist-Verbrauch (server.ts, onMeliousUsage) müssen dieselbe benutzen. */
+export const sitzungsKey = (userId: string, convId: string): string => `${safeId(userId)}:${safeId(convId)}`;
+
 // ---------- Ausgabe ----------
 
 function emit(live: Live, text: string) {
@@ -1488,7 +1491,7 @@ const CONTINUE_PROMPT ='Mach bitte genau dort weiter, wo du unterbrochen wurdest
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
 export async function handleTurn(req: TurnRequest): Promise<void> {
-  const key = `${safeId(req.userId)}:${safeId(req.convId)}`;
+  const key = sitzungsKey(req.userId, req.convId);
   const seen = lastSeen.get(key);
   let existing = lives.get(key);
   const now = Date.now();

@@ -11,9 +11,9 @@ import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { drain, drainSek } from './schlange.ts';
-import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sitzungsKey, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
-import { budgetAbrechnen, budgetMelder } from './kapazitaet.ts';
+import { budgetMelder } from './kapazitaet.ts';
 import { orchDirProblem } from './tools.ts';
 import { skillsFor } from './skills.ts';
 import { extractAttachments, saveAttachments, attachmentNote } from './attachments.ts';
@@ -335,7 +335,7 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
     // Melious (Plan 162): Verbrauch je Versuch an die Werkbank (zählt Tag/Monat, warnt bei 80 %, sperrt bei 100 %).
     onMeliousUsage: known && INTERNAL ? (u, model) => {
       fetch(`${WEB_URL}/internal/melious-usage`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-werkbank-internal': INTERNAL }, body: JSON.stringify({ userId, conv: convId, usage: u, model }) })
-        .then(async (r) => { const j: any = await r.json().catch(() => null); if (typeof j?.energie === 'number') budgetAbrechnen(userId, convId, j.energie); }).catch(() => {});   // Paket D: Abrechnung gegen den Ist-Verbrauch
+        .then(async (r) => { const j: any = await r.json().catch(() => null); if (typeof j?.energie === 'number') budgetAbrechnen(userId, sitzungsKey(userId, convId), j.energie); }).catch(() => {});   // Paket D: Abrechnung gegen den Ist-Verbrauch — Kennung wie die Vorabbuchung im Zug (sessions.ts)
     } : undefined,
     onMeasure: known && INTERNAL ? (m) => {
       log('kontext gemessen', { user: userId, ...m });
