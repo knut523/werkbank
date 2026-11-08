@@ -69,8 +69,12 @@ export function vorlaufLesen(pfad: string): Eintrag[] {
 /** Kurzform ohne Geheimnisse: nur Befehl und gekürzte Argumente, nie die Umgebung. */
 const kurz = (cmd: string, args: string[]) => [cmd, ...args].join(' ').replace(/\s+/g, ' ').slice(0, 120);
 
-/** PGID + Startzeit aus /proc/<pid>/stat (Feld 5 = pgrp; Feld 22 = Startzeit, siehe procStart). */
-function pgidOf(pid: number): number | null {
+/** Prozessgruppe aus /proc/<pid>/stat. Nach dem Abschneiden hinter ') ' stehen state(0) ppid(1) pgrp(2) session(3). */
+export function pgidOf(pid: number): number | null {
+  try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); const rest = s.slice(s.lastIndexOf(')') + 2).split(' '); return Number(rest[2]); } catch { return null; }
+}
+/** Session-ID (rest[3]). Ein Kind mit eigener Gruppe (Job-Control) bleibt in der Session des `starte`-Leaders (setsid: sid == Leader-PID). */
+function sidOf(pid: number): number | null {
   try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); const rest = s.slice(s.lastIndexOf(')') + 2).split(' '); return Number(rest[3]); } catch { return null; }
 }
 function startzeitOf(pid: number): string | null {
@@ -90,7 +94,8 @@ export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<num
   for (const e of eintraege) {
     // Leader lebt mit passender Startzeit → eigene Gruppe ordentlich TERM → KILL.
     if (lebt(e)) { if (await beendenProz(e, frist)) geräumt++; continue; }
-    // Leader weg (Absturz, kein exit-Handler) → Gruppe kann noch leben: alle /proc-Prozesse mit pgid == e.pid
+    // Leader weg (Absturz, kein exit-Handler) → Rest kann noch leben: alle /proc-Prozesse mit Session == e.pid
+    // (fasst Job-Control-Kinder mit eigener Gruppe mit; sie werden einzeln, nicht per kill(-pgid), beendet)
     // und Startzeit >= e.start suchen und per SIGKILL beenden. Ohne e.start nichts tun (könnte fremd sein).
     if (!e.start || !e.pid) continue;
     // PID existiert noch, aber mit anderer Startzeit → PID wiederverwendet, Gruppe gehört jemand anderem: nie anfassen.
@@ -98,8 +103,7 @@ export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<num
     if (existsSync(`/proc/${e.pid}`)) continue;
     const alt = Number(e.start);
     for (const pid of lebendePids()) {
-      const pgid = pgidOf(pid);
-      if (pgid !== e.pid) continue;                     // fremde Gruppe, nie anfassen
+      if (sidOf(pid) !== e.pid) continue;               // fremde Session, nie anfassen
       const z = startzeitOf(pid);
       if (!z || Number(z) < alt) continue;   // zu alt oder unlesbar → fremd, nie anfassen
       try { process.kill(pid, 'SIGKILL'); } catch { /* weg */ }
