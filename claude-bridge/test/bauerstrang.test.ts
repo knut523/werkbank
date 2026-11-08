@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from '../src/bauerstrang.ts';
-import { bauerEreignisse, statistikLaden, SONNET } from '../src/bauerrennen.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, kandidatDiff, pruefUrteil } from '../src/bauerstrang.ts';
+import { bauerEreignisse, statistikLaden, tamperGruende, SONNET } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 import { BAUER_REGELN } from '../src/strangpruefung.ts';
 
@@ -296,4 +296,128 @@ test('L2: Fixer ändert den roten Prüfer-Test → Test wiederhergestellt, Schle
     assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n'); assert.equal(existsSync(join(cwd, 'src/pruef.test.ts')), false, 'nichts angewendet');
     assert.ok(ev.find((x) => x.id === 'l2g').gateLog.some((l: string) => /Fixer änderte Prüfer-Test: src\/pruef\.test\.ts/.test(l)), 'gateLog');
   } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+// ---- wb21/fx-rennen: Tamper-Guard-Lücken, Retry-Sieger ohne Schleife, leere Prüfkonfiguration ----------------------------------------------
+/** Repo mit bestehendem Test src/b.test.ts (+ Nicht-ASCII-Test src/ü.test.ts) und src/alt.test.ts mit zwei Assertions. */
+function repoMitTests() {
+  const r = repo();
+  writeFileSync(join(r.cwd, 'src/b.test.ts'), "import { test } from 'node:test';\ntest('b', () => {});\n");
+  writeFileSync(join(r.cwd, 'src/ü.test.ts'), "import { test } from 'node:test';\ntest('u', () => {});\n");
+  writeFileSync(join(r.cwd, 'src/alt.test.ts'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('alt', () => {\n  assert.equal(1, 1);\n  assert.equal(2, 2);\n});\n");
+  g(r.cwd, 'add', '-A'); g(r.cwd, 'commit', '-q', '-m', 'tests');
+  return r;
+}
+
+test('Fix 1: kandidatDiff ohne Renames — Test per git mv aus dem Muster (auch Nicht-ASCII, .bak) → tamperGruende meldet gelöschte Testdatei', async () => {
+  for (const [von, nach] of [['src/b.test.ts', 'src/b.ts'], ['src/b.test.ts', 'src/b.test.ts.bak'], ['src/ü.test.ts', 'src/ü.ts']]) {
+    const { wurzel, cwd } = repoMitTests();
+    try {
+      const base = g(cwd, 'rev-parse', 'HEAD').trim();
+      g(cwd, 'mv', von, nach);
+      const diff = await kandidatDiff(cwd, base);
+      const gr = tamperGruende(diff);
+      assert.ok(gr.some((x) => /Testdatei gelöscht/.test(x)), `${von} → ${nach}: ${JSON.stringify(gr)}\n${diff}`);
+    } finally { rmSync(wurzel, { recursive: true, force: true }); }
+  }
+});
+
+test('Fix 1 (Ende zu Ende): beide Bauer benennen den Test aus dem Muster → kein Sieger, nichts angewendet', async () => {
+  const { wurzel, cwd } = repoMitTests();
+  const renameZug = async (dir: string, _m: string, prompt = '') => { if (prompt.startsWith('Linse')) return PRUEFER_SAUBER; g(dir, 'mv', 'src/b.test.ts', 'src/b.ts'); return { ok: true, text: 'fertig', grund: '' }; };
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx1', prompt: 'ändere src/a.ts', env: {}, zug: renameZug, pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.equal(existsSync(join(cwd, 'src/b.test.ts')), true, 'Test im Strang unberührt'); assert.equal(existsSync(join(cwd, 'src/b.ts')), false);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+/** Zug wie l2Zug (DeepSeek baut klein, Prüfer schreibt roten Test), aber der Fixer richtet zusätzlich `fixerTut` an. */
+function fixerZug(fixerTut: (dir: string) => void, builderTut: (dir: string) => void = () => {}) {
+  return async (dir: string, m: string, prompt: string) => {
+    const a = join(dir, 'src/a.ts');
+    if (prompt.startsWith('Linse')) {
+      const fehlt = !readFileSync(a, 'utf8').includes('// fix');
+      if (fehlt && prompt.startsWith('Linse Logik')) writeFileSync(join(dir, 'src/pruef.test.ts'), PRUEFTEST);
+      return { ok: true, text: fehlt && prompt.startsWith('Linse Logik') ? 'ERGEBNIS: 1 rote Tests' : 'ERGEBNIS: keine Befunde', grund: '' };
+    }
+    if (prompt.startsWith('## Fixrunde')) { writeFileSync(a, readFileSync(a, 'utf8') + '// fix\n'); fixerTut(dir); return { ok: true, text: 'gefixt', grund: '' }; }
+    writeFileSync(a, zeilen(m === DEEPSEEK ? 2 : 6)); builderTut(dir); return { ok: true, text: `fertig ${m}`, grund: '' };
+  };
+}
+const zeileWeg = (datei: string, muster: RegExp) => (dir: string) => { const f = join(dir, datei); writeFileSync(f, readFileSync(f, 'utf8').split('\n').filter((z) => !muster.test(z)).join('\n')); };
+
+test('Fix 2: Fixer löscht Assertion in bestehendem Repo-Test → nicht ok, Grund im gateLog, nichts angewendet', async () => {
+  const { wurzel, cwd } = repoMitTests(); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx2a', prompt: 'ändere src/a.ts', env: {}, zug: fixerZug(zeileWeg('src/alt.test.ts', /assert\.equal\(2, 2\)/)), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+    assert.ok(ev.find((x) => x.id === 'fx2a').gateLog.some((l: string) => /Tamper-Guard nach der Strang-Prüfung.*alt\.test\.ts/.test(l)), JSON.stringify(ev.find((x) => x.id === 'fx2a')?.gateLog));
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 2: Fixer schwächt den EIGENEN neuen Test des Bauers → nicht ok, Grund im gateLog', async () => {
+  const { wurzel, cwd } = repoMitTests(); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  const neuerTest = (dir: string) => writeFileSync(join(dir, 'src/neu.test.ts'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('neu', () => {\n  assert.equal(1, 1);\n  assert.equal(2, 2);\n});\n");
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx2b', prompt: 'ändere src/a.ts', env: {}, zug: fixerZug(zeileWeg('src/neu.test.ts', /assert\.equal\(2, 2\)/), neuerTest), pruefe });
+    assert.equal(r?.ok, false, JSON.stringify(r));
+    assert.ok(ev.find((x) => x.id === 'fx2b').gateLog.some((l: string) => /Tamper-Guard nach der Strang-Prüfung.*neu\.test\.ts/.test(l)), JSON.stringify(ev.find((x) => x.id === 'fx2b')?.gateLog));
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 3: BRIDGE_STRANGPRUEFUNG=aus — Retry-Sieger mit rotem vollen Lauf wird nicht angewendet (Sonnet-Übergabe)', async () => {
+  const { wurzel, cwd } = repo();
+  const aufrufe: string[] = [];
+  const retryZug = async (dir: string, m: string) => { aufrufe.push(m); writeFileSync(join(dir, 'src/a.ts'), zeilen(aufrufe.length > 2 ? 3 : 9)); return { ok: true, text: `fertig ${m}`, grund: '' }; };
+  let schnellN = 0; const voll: string[] = [];
+  const p = async (_d: string, _b: string, art: 'schnell' | 'voll') => { if (art === 'voll') { voll.push(art); return { ok: false, log: 'voll rot' }; } return ++schnellN <= 2 ? { ok: false, log: 'tsc rot im Rennen' } : { ok: true, log: '' }; };
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx3', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: retryZug, pruefe: p });
+    assert.equal(aufrufe.length, 3, 'zwei Rennbauer plus Retry');
+    assert.equal(voll.length, 1, 'voller Lauf lief am Retry-Sieger');
+    assert.equal(r?.ok, false, JSON.stringify(r)); assert.match(r!.grund, /Sonnet-Klasse/);
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 3: Schleife aus, normaler Sieger — voller Lauf genau einmal (kein Doppellauf)', async () => {
+  const { wurzel, cwd } = repo(); let voll = 0;
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx3b', prompt: 'ändere src/a.ts', env: { BRIDGE_STRANGPRUEFUNG: 'aus' }, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe: async (_d, _b, art) => { if (art === 'voll') voll++; return { ok: true, log: '' }; } });
+    assert.equal(r?.ok, true); assert.equal(voll, 1);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 4: pruefUrteil — ohne eingerichtete Prüfbefehle kein Sieger (ok:false, feste Meldung); mit grünen Prüfungen ok; rot bleibt rot', () => {
+  const gruen = { name: 'diff-check', befehl: 'git diff --check', ok: true, code: 0, ausgabe: '', ms: 1 };
+  for (const art of ['schnell', 'voll'] as const) {
+    const leer = pruefUrteil({ eingerichtet: false, ergebnisse: [gruen] });
+    assert.equal(leer.ok, false, art); assert.equal(leer.log, 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein automatischer Sieger');
+  }
+  assert.equal(pruefUrteil({ eingerichtet: true, ergebnisse: [gruen] }).ok, true);
+  const rot = pruefUrteil({ eingerichtet: true, ergebnisse: [gruen, { ...gruen, name: 'tsc', ok: false, ausgabe: 'TS2322' }] });
+  assert.equal(rot.ok, false); assert.equal(rot.tsc, false); assert.equal(rot.lint, true); assert.match(rot.log, /tsc: TS2322/);
+});
+
+test('Fix 4b: Repo ohne Prüfbefehle → Rennen gar nicht gestartet (kein Zug, Statistik unverändert), Sonnet-Übergabe mit klarem Grund, im Ledger sichtbar', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const stat = join(wurzel, 'bauerstatistik.json'); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx4b', prompt: 'ändere src/a.ts', env: {}, statistikPfad: stat, zug: zug({}), pruefe, eingerichtet: async () => false } as any);
+    assert.equal(gebaut.length, 0, 'zug nie gerufen');
+    assert.equal(existsSync(stat), false, 'Statistik nicht angefasst'); assert.deepEqual(statistikLaden(stat), { laeufe: 0, zweitSiege: 0 });
+    assert.deepEqual(r, { ok: false, text: '', grund: 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein Best-of-N, Sonnet baut' });
+    assert.ok(ev.find((x) => x.id === 'fx4b')?.gateLog.some((l: string) => /keine Prüfbefehle eingerichtet/.test(l)), 'Ledger/gateLog');
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n');
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 4b: Repo mit Prüfbefehlen → Rennen läuft wie bisher, Statistik wird gezählt', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0; const stat = join(wurzel, 'bauerstatistik.json');
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx4c', prompt: 'ändere src/a.ts', env: {}, statistikPfad: stat, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe, eingerichtet: async () => true } as any);
+    assert.equal(r?.ok, true); assert.equal(gebaut.length, 2); assert.equal(statistikLaden(stat).laeufe, 1);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
 });
