@@ -9,7 +9,7 @@
 // nie Basis, nie neue PRs. Je Push-Entscheidung ein Audit-Eintrag (`pr_fix_audit`). Not-Aus: WERKBANK_FIX=off.
 
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { wb } from './db.ts';
@@ -477,6 +477,18 @@ async function fixTickInnen(deps: FixDeps): Promise<{ started: number; done: num
   return { started, done };
 }
 
+/** cwd des besitzenden Strangs, wenn es ein Git-Worktree auf dem PR-Zweig am PR-Kopf ist; sonst null. */
+async function besitzerDir(strand: string, pr: PrLage, deps: FixDeps, g: GitRun): Promise<string | null> {
+  try {
+    const cwd = String((await deps.strandDoc(strand))?.cwd ?? '');
+    if (!cwd || !existsSync(cwd)) return null;
+    const top = String(await g(['rev-parse', '--show-toplevel'], cwd)).trim();
+    const zweig = String(await g(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)).trim();
+    const kopf = String(await g(['rev-parse', 'HEAD'], cwd)).trim();
+    return realpathSync(top) === realpathSync(cwd) && zweig === pr.headRefName && kopf === pr.headRefOid ? cwd : null;
+  } catch { return null; }
+}
+
 async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: Date): Promise<boolean> {
   const pr = await deps.pr(f.repo, f.number);
   // Ohne Push, Gate oder Testausführung könnte der Fix nie gepusht werden — dann gar keinen Strang starten.
@@ -504,14 +516,23 @@ async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: 
   if (kontext) writeFileSync(join(dir, 'kontext.md'), kontextMd({ repo: f.repo, number: f.number, head }, kontext));
   const dm = await diffMaterial(wt, klonPfad(f.repo), pr!.baseRefName, head, null, g);
   for (const [name, text] of Object.entries(dm.dateien)) writeFileSync(join(dir, name), text);
-  const prompt = fixPrompt({ ...f, head }, { wt, paket, zweig: pr!.headRefName, basis: pr!.baseRefName, kontext: !!kontext, offene: f.auftrag ? '' : offenePunkte(kontext, f.by), gate: deps.gatePfad ?? null, alle: kontext ? punkteFuerAuftrag(alleOffenenPunkte(kontext)) : undefined });
-  writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
+  const baue = (dirW: string) => fixPrompt({ ...f, head }, { wt: dirW, paket, zweig: pr!.headRefName, basis: pr!.baseRefName, kontext: !!kontext, offene: f.auftrag ? '' : offenePunkte(kontext, f.by), gate: deps.gatePfad ?? null, alle: kontext ? punkteFuerAuftrag(alleOffenenPunkte(kontext)) : undefined });
   // B5: gibt es einen Strang, der den PR besitzt, bekommt er das Feedback in seiner Session; sonst wie bisher ein neuer Fix-Strang.
+  // Der Fix-Worktree IST dann das cwd des Besitzers (dort committet er, die Brücke erlaubt nur cwd + Vault) — und nur, wenn das ein
+  // Git-Worktree auf dem PR-Zweig am PR-Kopf ist; sonst frischer Klon wie ohne Besitzer.
   let wieder: string | null = besitzerAn() && deps.besitzer && deps.sendStrand ? await deps.besitzer(f).catch(() => null) : null;
-  if (wieder) { try { await deps.sendStrand!(f, wieder, prompt); } catch (e: any) { deps.log?.('pr-fix besitzer', { pr: `${f.repo}#${f.number}`, error: scrub(e?.message ?? e) }); wieder = null; } }
+  let fixWt = wt;
+  if (wieder) {
+    const cwd = await besitzerDir(wieder, pr!, deps, g);
+    if (!cwd) { deps.log?.('pr-fix besitzer', { pr: `${f.repo}#${f.number}`, error: 'cwd des Besitzers ist kein Worktree auf dem PR-Zweig am PR-Kopf — frischer Klon' }); wieder = null; }
+    else fixWt = cwd;
+  }
+  let prompt = baue(fixWt);
+  if (wieder) { try { await deps.sendStrand!(f, wieder, prompt); } catch (e: any) { deps.log?.('pr-fix besitzer', { pr: `${f.repo}#${f.number}`, error: scrub(e?.message ?? e) }); wieder = null; fixWt = wt; prompt = baue(wt); } }
+  writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
   const st = wieder ? { id: wieder } : await deps.startOrch(u, { title: `Fix ${f.repo.split('/')[1]}#${f.number}`, prompt, cwd: wt, code: false, profil: 'bauer', lauf: 'PR-Fixes', aufrufer: 'pr-ticker', tiefe: 'regular', modell: REVIEW_MODELL, vorrang: true, jobtyp: 'dringend' });   // Fixrunde nach abgelehnter Review: Rang 0 (Paket D)
   // Nur aus „startet“ (Gegenprüfung M1): hat der Reaper den Eintrag inzwischen abgeschlossen, wird er nie geprüft oder gepusht.
-  await fixesCol().updateOne({ _id: f._id, status: 'startet' }, { $set: { status: 'läuft', strand: st.id, wieder: !!wieder, paket, worktree: wt, head, zweig: pr!.headRefName, basis: pr!.baseRefName, mb: dm.basis, autor: kontext?.author ?? null, eta: FIX_ETA_MIN, note: dm.hinweis.join('; ') || null } });
+  await fixesCol().updateOne({ _id: f._id, status: 'startet' }, { $set: { status: 'läuft', strand: st.id, wieder: !!wieder, paket, worktree: fixWt, head, zweig: pr!.headRefName, basis: pr!.baseRefName, mb: dm.basis, autor: kontext?.author ?? null, eta: FIX_ETA_MIN, note: dm.hinweis.join('; ') || null } });
   deps.log?.('pr-fix gestartet', { pr: `${f.repo}#${f.number}`, strand: st.id });
   await setzeStatus(f, fixZeile({ art: 'running', eta: FIX_ETA_MIN }), deps, now);
   return true;
@@ -537,6 +558,7 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
   const klon = klonPfad(f.repo);
   const fix = liesFixJson(lies(join(dir, 'fix.json')));
   const neu = String(await g(['rev-parse', 'HEAD'], f.worktree)).trim();
+  if (f.wieder && neu !== f.head) await g(['fetch', '--no-tags', f.worktree, neu], klon);   // Besitzer-Commits liegen im eigenen Objektspeicher, gepusht wird aus dem Review-Klon
   const ff = neu === f.head ? true : await Promise.resolve(g(['merge-base', '--is-ancestor', f.head, neu], f.worktree)).then(() => true, () => false);
   const liste = ff && neu !== f.head ? String(await g(['log', '--format=%H %s', '--reverse', `${f.head}..${neu}`], f.worktree)).split('\n').filter(Boolean) : [];
   const commits = liste.map((z) => ({ sha: z.slice(0, 40), titel: z.slice(41) }));
@@ -726,6 +748,8 @@ async function freigabeLauf(f: any, s: TickerSettings, deps: FixDeps, g: GitRun,
 async function pruefeNachStrang(f: any, deps: FixDeps, g: GitRun, now: Date, neu: string) {
   const dir = join(reviewDir(), f.paket);
   const klon = klonPfad(f.repo);
+  // Wiederverwendeter Besitzer: seine Commits liegen im eigenen Repo-Objektspeicher, der Push läuft aber aus dem Review-Klon — dorthin holen.
+  if (f.wieder && neu !== f.head) await g(['fetch', '--no-tags', f.worktree, neu], klon);
   const fix = liesFixJson(lies(join(dir, 'fix.json')));
   const ff = neu === f.head ? true : await Promise.resolve(g(['merge-base', '--is-ancestor', f.head, neu], f.worktree)).then(() => true, () => false);
   const liste = ff && neu !== f.head ? String(await g(['log', '--format=%H %s', '--reverse', `${f.head}..${neu}`], f.worktree)).split('\n').filter(Boolean) : [];
