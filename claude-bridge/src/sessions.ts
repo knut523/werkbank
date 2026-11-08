@@ -732,6 +732,8 @@ export const MEL_SUB_HINT_CLAUDE = `Verteilung Claude ↔ Melious: Melious ist g
 export { safeId };
 
 /** Kennung einer Unterhaltung: Buchung beim Zug-Start (hier) und Abrechnung gegen den Ist-Verbrauch (server.ts, onMeliousUsage) müssen dieselbe benutzen. */
+/** Hat diese Unterhaltung einen laufenden Zug (z. B. mit offener Rückfrage)? */
+export const hatLaufendenZug = (userId: string, convId: string): boolean => lives.has(sitzungsKey(userId, convId));
 export const sitzungsKey = (userId: string, convId: string): string => `${safeId(userId)}:${safeId(convId)}`;
 
 // ---------- Ausgabe ----------
