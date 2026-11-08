@@ -34,6 +34,7 @@ import { opencode2Server, oc2Home, oc2Ports, oc2Version, type Oc2Server } from '
 import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.ts';
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
+import { fehlerklasse, fehlerklassenAn } from './fehlerklassen.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, type Kapazitaet } from './kapazitaet.ts';
 
@@ -99,6 +100,8 @@ interface Live {
   // Mehrere Claude-Konten: hat dieser Versuch rate_limit gemeldet (mit Reset), und ist schon etwas passiert?
   rateLimited: { resetsAt?: number } | null;
   rateLimitReset?: number;
+  /** B6: der Zug endete an einer Überlast (529) — Brücke vermerkt es im Zug, der Strang wartet mit Backoff. */
+  ueberlast?: boolean;
   progressed: boolean;
   // Orchestrator (P2): gestartete Teilagenten (tool_use_id → Beschreibung), Starts in diesem Zug, Rolle je agent_id.
   subagents: Map<string, string>;
@@ -254,7 +257,7 @@ export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte 
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
 // (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
 export interface Sperren { waechter: number; klassifikator: number; grund: string }
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; resetsAt?: number; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -587,6 +590,14 @@ export function endLeitstand(userId: string, convId: string): boolean {
 export function wakeBatch(prompt: string): string | null {
   const last = prompt.trimEnd().split('\n').at(-1) ?? '';
   return last.match(/^#leitstand-([a-f0-9]{8,32})$/)?.[1] ?? null;
+}
+
+/** B6: Fehlerklasse und Reset-Zeitpunkt des Zuges für den Strang-Takt (nur gesetzt, wenn es sie gab). */
+function turnFehler(live: { ueberlast?: boolean; rateLimitReset?: number; outcome?: string }): { grund?: string; resetsAt?: number } {
+  if (!fehlerklassenAn()) return {};
+  if (live.ueberlast && (live.outcome === 'error' || !live.outcome)) return { grund: 'overloaded' };
+  if (live.outcome === 'rate_limit' && live.rateLimitReset) return { resetsAt: live.rateLimitReset };
+  return {};
 }
 
 function setTurn(key: string, turn: OrchEntry['turn']) {
@@ -952,6 +963,9 @@ function handleMessage(live: Live, msg: any) {
       } else if (msg.error === 'rate_limit') {
         // Kontingent ausgeschöpft: die Meldung kommt erst, wenn kein weiteres Konto übernehmen kann (handleTurn).
         live.rateLimited = { resetsAt: live.rateLimitReset };
+      } else if (msg.error && fehlerklassenAn() && fehlerklasse(msg.error, msgText(msg)) === 'ueberlast') {
+        live.ueberlast = true;
+        emitStatus(live, `⚠️ ${AUTH_HINTS.overloaded}`);
       } else if (msg.error) {
         emitStatus(live, `⚠️ ${AUTH_HINTS[msg.error] ?? `Claude meldet einen Fehler (${msg.error}).`}`);
       }
@@ -1956,7 +1970,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       let lastRead: string[] = [];
       let phaseSwitches = 0;
       for (let i = 0; ; i++) {
-        live.rateLimited = null; live.rateLimitReset = undefined; live.progressed = false;
+        live.rateLimited = null; live.rateLimitReset = undefined; live.ueberlast = false; live.progressed = false;
         providerMap.set(key, providerOf(acct));
         if (providerMap.size > 5000) providerMap.delete(providerMap.keys().next().value!);
         const u0 = { ...live.usage }, a0 = Date.now();
@@ -2067,6 +2081,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       if (live.inbox?.open) closeInbox(live.inbox);
       mark(live, 'ende');
       if ((live.orch || live.leit) && orchMap[key]?.kind !== 'beendet') setTurn(key, { ...orchMap[key]?.turn, start: orchMap[key]?.turn?.start ?? live.t0, end: Date.now(), outcome: live.outcome ?? (live.abort.signal.aborted ? 'aborted' : 'ok'),
+        ...turnFehler(live),
         ...(live.sperren.waechter || live.sperren.klassifikator ? { sperren: { ...live.sperren } } : { sperren: undefined }) });
       log('turn end', { conv: key, usage: live.usage, ms: live.times, ...(live.subagentStarts ? { teilagenten: live.subagentStarts } : {}), ...(live.denials.length ? { denials: live.denials } : {}) });
       // Worker leben höchstens so lange wie der Lead-Zug (Council 165, 3).

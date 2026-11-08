@@ -197,14 +197,17 @@ export function statusMark(text: string): 'fertig' | 'braucht Antwort' | 'blocki
   return v === 'fertig' ? 'fertig' : v === 'braucht antwort' ? 'braucht Antwort' : v === 'blockiert' ? 'blockiert' : v === 'läuft' ? 'läuft' : null;
 }
 
-export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number; grund?: string } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string; grund?: string; sperren?: { waechter: number; klassifikator: number; grund: string } } | null }
+/** B6: Text meldet Warten auf Eingabe (Antwort/Freigabe) → Status braucht_dich statt Retry. */
+export const wartetAufEingabe = (text: string) => process.env.BRIDGE_FEHLERKLASSEN !== 'aus' && /wartet auf (deine |eine |die )?(eingabe|antwort|freigabe)|waiting for (user )?input|awaiting (user )?input/i.test(text);
+
+export interface StrandState { running: boolean; interrupted: boolean; queued?: { pos: number; since: number; grund?: string } | null; turn: { start: number; end: number | null; outcome: string | null; modell?: string; grund?: string; resetsAt?: number; sperren?: { waechter: number; klassifikator: number; grund: string } } | null }
 export interface LastMsg { fromUser: boolean; text: string; error: boolean; at: number }
 
 /**
  * Status eines Strangs (rein, testbar). Reihenfolge: Startfehler → läuft (Brücke) → abgebrochen (Neustart) → letzte
  * Nachricht noch nicht bei der Brücke → Ausgang des Zuges → Status-Marke der Antwort.
  */
-export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit' | 'ohne_status' | 'sperre';
+export type AutoCause = 'limit' | 'timeout' | 'interrupted' | 'lost' | 'busy' | 'rate_limit' | 'ueberlast' | 'ohne_status' | 'sperre';
 
 export function orchStatus(run: { startError?: string | null; startedAt: Date | number; lastSentAt?: Date | number | null }, s: StrandState | null | undefined, last: LastMsg | null, now = Date.now()): { status: OrchStatus; reason: string; cause?: AutoCause } {
   if (run.startError) return { status: 'failed', reason: `Start fehlgeschlagen: ${run.startError}` };
@@ -232,8 +235,10 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
     case 'busy': return { status: 'failed', reason: `kein Platz in der Brücke${s.turn.grund ? ` (${s.turn.grund})` : ''} — wird automatisch fortgesetzt, sonst \`send <id> weiter\``, cause: 'busy' };
     case 'limit': return { status: 'waiting', reason: 'Schrittlimit des Zuges erreicht — `send <id> weiter`', cause: 'limit' };
     case 'timeout': return { status: 'waiting', reason: 'Zeitlimit des Zuges erreicht — `send <id> weiter`', cause: 'timeout' };
-    case 'rate_limit': return { status: 'failed', reason: 'Claude-Kontingent ausgeschöpft', cause: 'rate_limit' };
-    case 'error': return { status: 'failed', reason: 'Fehler in der Claude-Sitzung — Chat ansehen, ggf. `send <id> weiter`' };
+    case 'rate_limit': return { status: 'failed', reason: s.turn.resetsAt && s.turn.resetsAt > now ? `Claude-Kontingent ausgeschöpft — Reset ${new Date(s.turn.resetsAt).toISOString().slice(11, 16)} UTC` : 'Claude-Kontingent ausgeschöpft', cause: 'rate_limit' };
+    // B6: Überlast (529) ist kein Fehler des Strangs — Backoff und automatisch weiter (BRIDGE_FEHLERKLASSEN=aus: altes Verhalten).
+    case 'error': if (s.turn.grund === 'overloaded' && process.env.BRIDGE_FEHLERKLASSEN !== 'aus') return { status: 'failed', reason: 'Claude überlastet (529) — Backoff, wird automatisch fortgesetzt', cause: 'ueberlast' };
+      return { status: 'failed', reason: 'Fehler in der Claude-Sitzung — Chat ansehen, ggf. `send <id> weiter`' };
     case 'aborted': return { status: 'failed', reason: 'Zug abgebrochen' };
   }
   // Normal beendet: die Antwort speichert LibreChat erst nach dem Zug.
@@ -258,6 +263,8 @@ export function orchStatus(run: { startError?: string | null; startedAt: Date | 
   const t8 = ohneStatusAn() && fortsetzbar ? { cause: 'ohne_status' as const } : {};
   if (mark === 'braucht Antwort') return t8.cause && !echteFrage(last.text) ? { status: 'waiting', reason: 'meldet „braucht Antwort“, aber nichts an Knut oder den Hauptchat — wird automatisch fortgesetzt', ...t8 } : { status: 'waiting', reason: 'Agent braucht eine Antwort' };
   if (mark === 'läuft') return { status: 'waiting', reason: t8.cause ? 'Agent meldet „läuft“ — wird automatisch fortgesetzt' : 'Agent meldet „läuft“ — lesen und antworten', ...t8 };
+  // B6: „wartet auf Eingabe“ ist ein Fall für Knut (braucht_dich), kein Retry — kein automatisches „weiter“.
+  if (wartetAufEingabe(last.text)) return { status: 'waiting', reason: 'braucht_dich: wartet auf Eingabe — kein automatisches „weiter“' };
   return { status: 'waiting', reason: 'Antwort ohne Status-Marke — lesen und antworten', ...t8 };
 }
 
@@ -283,7 +290,7 @@ export function mitDeckel(st: { status: OrchStatus; reason: string; cause?: Auto
 
 export const AUTO_BUSY_MS = 2 * 60_000, AUTO_RATE_MS = 30 * 60_000, AUTO_SAVE_MS = 30_000, AUTO_STALE_MS = 6 * 3600_000;
 export const autoMax = () => Math.max(1, Math.floor(Number(process.env.ORCH_AUTO_WEITER_MAX)) || 30);
-export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ohne_status: 'Zug endete ohne Status-Zeile', sperre: 'Sperre (Wächter/Auto-Modus)' };
+export const CAUSE_TEXT: Record<AutoCause, string> = { limit: 'Schrittlimit', timeout: 'Zeitlimit', interrupted: 'Brücke neu gestartet', lost: 'Nachricht nicht angekommen', busy: 'Parallelgrenze', rate_limit: 'Kontingent', ueberlast: 'Überlast (529)', ohne_status: 'Zug endete ohne Status-Zeile', sperre: 'Sperre (Wächter/Auto-Modus)' };
 /** Plan §23 T8: so oft höchstens „weiter“ nach einem Zug ohne Status-Marke (oder mit „läuft“) — danach „hängt“ + Hauptchat. */
 export const OHNE_STATUS_MAX = 2;
 /** Hauptsitzung 05.11. 17:20: Anstoß erst so lange nach dem Zugende (Zeit, die Antwort zu lesen). */
@@ -370,7 +377,13 @@ export function autoWeiter(run: AutoRun, st: { cause?: AutoCause }, s: StrandSta
   // Council 15.10., C5: Parallelgrenze → wachsender Abstand (2, 4, 8, 16, 32 min) statt alle 2 min neu (jeder Neustart lädt den vollen Kontext).
   const busyMs = AUTO_BUSY_MS * 2 ** Math.min(4, Math.max(0, Number(run.autoStreak ?? 0)));
   if (cause === 'busy' && ctx.now - end < busyMs) return { action: 'wait', key, why: `Parallelgrenze — erneut nach ${Math.round(busyMs / 60_000)} min` };
-  if (cause === 'rate_limit' && ctx.now - end < AUTO_RATE_MS && !ctx.accountFree) return { action: 'wait', key, why: 'Kontingent — erneut nach 30 min oder bei freiem Konto' };
+  // B6: Überlast → Backoff 1, 2, 4, 8, 16 min je Fortsetzung (kein blindes Wiederholen im Takt).
+  const ueberMs = 60_000 * 2 ** Math.min(4, Math.max(0, Number(run.autoStreak ?? 0)));
+  if (cause === 'ueberlast' && ctx.now - end < ueberMs) return { action: 'wait', key, why: `Überlast (529) — Backoff, erneut nach ${Math.round(ueberMs / 60_000)} min` };
+  // B6: Limit → bis resetsAt warten (statt pauschal 30 min), oder sofort bei freiem Konto.
+  const reset = s?.turn?.resetsAt;
+  if (cause === 'rate_limit' && reset && reset > ctx.now && !ctx.accountFree) return { action: 'wait', key, why: `Kontingent — erneut ab Reset (${Math.ceil((reset - ctx.now) / 60_000)} min)` };
+  if (cause === 'rate_limit' && !reset && ctx.now - end < AUTO_RATE_MS && !ctx.accountFree) return { action: 'wait', key, why: 'Kontingent — erneut nach 30 min oder bei freiem Konto' };
   // Council R1, Bedingung 1: erst wenn LibreChat die Antwort des Zuges gespeichert hat (sonst falsche Elternnachricht).
   if ((cause === 'limit' || cause === 'timeout') && t && !(last && !last.fromUser && last.at >= t.start - 5000) && ctx.now - end < AUTO_SAVE_MS) return { action: 'wait', key, why: 'Antwort wird gespeichert' };
   if ((run.autoStreak ?? 0) >= ctx.max) return { action: 'stop', key, why: `${ctx.max}× automatisch fortgesetzt — Chat ansehen` };
