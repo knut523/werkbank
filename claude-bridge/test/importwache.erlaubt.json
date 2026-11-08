@@ -1,0 +1,211 @@
+{
+  "claude-bridge/src/auslastung.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer die Auslastungsabfrage (list --json, 20 s Timeout)"
+  },
+  "claude-bridge/src/claudehome.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "promisify(execFile) fuer skills-cli.ts --apply beim Abgleich des Claude-Home"
+  },
+  "claude-bridge/src/delegation.ts": {
+    "namen": [
+      "ChildProcess"
+    ],
+    "grund": "nur der Typ ChildProcess fuer das Kind, das starte() liefert; startet nichts selbst"
+  },
+  "claude-bridge/src/jcode-bash-guard.ts": {
+    "namen": [
+      "spawnSync"
+    ],
+    "grund": "Wachskript fuer jcode: spawnSync reicht Befehle an klick.ts bzw. /bin/bash durch (stdio inherit)"
+  },
+  "claude-bridge/src/mock.ts": {
+    "namen": [
+      "*"
+    ],
+    "grund": "Mock-Worker: dynamischer Import, execFileSync fuer git add/commit im Testrepo"
+  },
+  "claude-bridge/src/oc2server.ts": {
+    "namen": [
+      "ChildProcess",
+      "execFileSync",
+      "spawn"
+    ],
+    "grund": "eigener spawn fuer den opencode-Server (nodeSpawn, injizierbar) und execFileSync fuer die Versionsabfrage mit Timeout"
+  },
+  "claude-bridge/src/prozesse.ts": {
+    "namen": [
+      "ChildProcess",
+      "StdioOptions",
+      "spawn"
+    ],
+    "grund": "die zentrale Startstelle starte(): einziger erlaubter spawn, gesetzte Prozessgruppe und Aufraeumen"
+  },
+  "claude-bridge/src/sessions.ts": {
+    "namen": [
+      "execFileSync",
+      "spawn"
+    ],
+    "grund": "execFileSync fuer kurze git-Abfragen (config, rev-parse, 3 s Timeout); spawn ist importiert, wird aber nicht aufgerufen (toter Import, Aufraeumkandidat)"
+  },
+  "claude-bridge/src/tools.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "kurzer synchroner git-Aufruf (execFileSync, 5 s Timeout) fuer Repo-Infos in Werkzeugantworten"
+  },
+  "web/server/betriebroutes.ts": {
+    "namen": [
+      "execFile",
+      "spawn"
+    ],
+    "grund": "execFile und spawn (setsid, detached) fuer Betriebsskripte wie Neustart (Altbestand)"
+  },
+  "web/server/claudeverbinden.ts": {
+    "namen": [
+      "ChildProcess",
+      "spawn"
+    ],
+    "grund": "spawn von script fuer den interaktiven setup-token-Dialog (Altbestand)"
+  },
+  "web/server/creds.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer bw get password (Jira api, 20 s Timeout)"
+  },
+  "web/server/deck-import.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer pdftoppm beim Deck-Import"
+  },
+  "web/server/deckroutes.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile (detached) fuer Deck-Werkzeuge mit Timeout"
+  },
+  "web/server/freigabe.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "execFileSync fuer git bei der Freigabe (10 s Timeout, injizierbar als GitFn)"
+  },
+  "web/server/fresh.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "execFileSync fuer git-Aufrufe beim Frischepruefen (10 s Timeout, injizierbar)"
+  },
+  "web/server/gegenpruefung.ts": {
+    "namen": [
+      "execFile",
+      "spawn"
+    ],
+    "grund": "spawn fuer den jcode-Lauf der Gegenpruefung; execFile (promisify) fuer Hilfsaufrufe (Altbestand neben starte())"
+  },
+  "web/server/geheimnis.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer die bw-CLI (get item mit BW_SESSION, 20 s Timeout)"
+  },
+  "web/server/githubwrite.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer git credential fill (20 s Timeout)"
+  },
+  "web/server/laeufer.ts": {
+    "namen": [
+      "execFile",
+      "spawn"
+    ],
+    "grund": "spawn fuer mongod, Laeuferprozesse und ssh; execFile (promisify) fuer Hilfsaufrufe (Altbestand neben starte())"
+  },
+  "web/server/main.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer python3-Roadmap-Skript, git log und jira-sync-mark.sh (jeweils mit Timeout)"
+  },
+  "web/server/orchestrator.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "execFileSync fuer git rev-parse (3 s Timeout)"
+  },
+  "web/server/prfix.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "promisify(execFile) fuer git und Pruefskripte beim PR-Fix (Timeouts 10 bis 300 s)"
+  },
+  "web/server/prreview.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "promisify(execFile) fuer git mit G0-Zugangsdaten beim PR-Review (asynchron, damit der Server nicht haengt)"
+  },
+  "web/server/regelquelle.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer das Regelquellen-Skript (180 s Timeout)"
+  },
+  "web/server/releasestand.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer git-Abfragen zum Release-Stand (3 s Timeout)"
+  },
+  "web/server/reviewexec.ts": {
+    "namen": [
+      "spawn"
+    ],
+    "grund": "eigener spawn fuer Review-Laeufe (detached, Pipes), Altbestand neben starte()"
+  },
+  "web/server/reviewmotor.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "promisify(execFile) fuer git im Review-Motor (60 s Timeout)"
+  },
+  "web/server/roadmapauto.ts": {
+    "namen": [
+      "spawn",
+      "spawnSync"
+    ],
+    "grund": "spawnSync fuer flock-Pruefung (3 s) und spawn (detached) fuer das Roadmap-Skript"
+  },
+  "web/server/syncplan.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer das Sync-Plan-Skript (30 s Timeout)"
+  },
+  "web/server/testlink.ts": {
+    "namen": [
+      "spawn",
+      "spawnSync"
+    ],
+    "grund": "spawnSync fuer kurze Testlink-Befehle (60 s Timeout) und spawn (detached) fuer Dienste mit Logdatei"
+  },
+  "web/server/vaultwarden.ts": {
+    "namen": [
+      "execFile"
+    ],
+    "grund": "execFile fuer die bw-CLI (get item, 20 s Timeout)"
+  },
+  "web/server/vorbau.ts": {
+    "namen": [
+      "execFileSync"
+    ],
+    "grund": "execFileSync fuer git mit G0-Zugangsdaten und git var GIT_AUTHOR_IDENT"
+  }
+}
