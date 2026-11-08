@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { FLASH, DEEPSEEK, GLM } from './modellwahl.ts';
+import { FLASH, DEEPSEEK } from './modellwahl.ts';
 import { gruppeWeg } from './prozesse.ts';
 
 type Env = Record<string, string | undefined>;
@@ -188,13 +188,15 @@ export interface Deps {
   jetzt?(): number;
 }
 export interface Lauf { auftrag: Auftrag; sieger: BauErgebnis | null; verlierer?: { bauer: string; diff: string; at: number; benutzt?: boolean }; fixrunden: number; logs: string[]; /** Alle Bauer über dem Zeitdeckel: der Punkt ist zu groß — zerlegen statt eskalieren. */
-  zerlegen?: boolean }
+  zerlegen?: boolean;
+  /** Beide Bauer und der Retry rot: Übergabe an Sonnet durch den Aufrufer (OpenCode kann Sonnet nicht fahren). */
+  weiter?: 'sonnet' }
 export const VERLIERER_MS = 24 * 3600_000;
 
 const pruefe = async (d: Deps, a: Auftrag, r: BauErgebnis): Promise<Kandidat> =>
   r.ok ? { ...r, schnell: await d.schnell(r, a).catch((e) => ({ tsc: false, lint: false, tests: false, log: String(e) })) } : r;
 
-/** Ein Best-of-N-Lauf: bauen (parallel), prüfen, wählen; scheitern alle → glm-5.3 mit allen Fehlerlogs. Ledger-Hook je Lauf. */
+/** Ein Best-of-N-Lauf: bauen (parallel), prüfen, wählen; scheitern alle → derselbe erste Bauer noch einmal mit allen Fehlerlogs, wieder rot → lauf.weiter = 'sonnet'. Ledger-Hook je Lauf. */
 export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statistik } = {}): Promise<Lauf> {
   const bauer = bauerFuer(a.dateien, o.env, o.stat);
   const deckelS = bauerDeckelMs(o.env), fristS = abbruchFristMs(o.env);
@@ -216,9 +218,11 @@ export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statist
   if (bauer.length === 2) zaehle(o.stat ?? neueStatistik(), sieger?.bauer ?? null);
   if (!sieger && !lauf.zerlegen && bauer[0] !== OPUS) {
     const logs = lauf.logs.concat(abgelehnt.map((x) => `${x.bauer}: ${x.grund}`), ks.map((k) => k.schnell?.log ?? k.log ?? '').filter(Boolean));
-    const k = await pruefe(d, a, await mitDeckel((signal, vorbereitung) => d.bauen(GLM, a, { fehlerlogs: logs, signal, vorbereitung }).catch((e) => ({ bauer: GLM, ok: false, diff: '', log: String(e) })), GLM, deckelS, fristS));
-    bauer.push(GLM); lauf.logs = logs;
+    const erster = bauer[0];   // Council: gleicher erster Bauer, jetzt mit den roten Logs
+    const k = await pruefe(d, a, await mitDeckel((signal, vorbereitung) => d.bauen(erster, a, { fehlerlogs: logs, signal, vorbereitung }).catch((e) => ({ bauer: erster, ok: false, diff: '', log: String(e) })), erster, deckelS, fristS));
+    bauer.push(erster); lauf.logs = logs;
     const w = waehle([k]); sieger = w.sieger; abgelehnt = abgelehnt.concat(w.abgelehnt); lauf.sieger = sieger;
+    if (!sieger) lauf.weiter = 'sonnet';
   }
   const verl = rf.im.find((k) => k !== sieger && !rote.has(k)); // nur sauber geprüfte Verlierer taugen als Retry
   if (verl) lauf.verlierer = { bauer: verl.bauer, diff: verl.diff, at: (d.jetzt ?? Date.now)() };
@@ -226,13 +230,13 @@ export async function rennen(d: Deps, a: Auftrag, o: { env?: Env; stat?: Statist
   return lauf;
 }
 
-export type Folge = { art: 'verlierer'; bauer: string; diff: string } | { art: 'fix'; bauer: string } | { art: 'eskalation'; bauer: string; fehlerlogs: string[] };
-/** Rein: was folgt, wenn das Review den Sieger ablehnt. Erst der Verlierer-Diff (24 h), dann Fixrunden; nach 2 abgelehnten Fixrunden → glm-5.3. */
+export type Folge = { art: 'verlierer'; bauer: string; diff: string } | { art: 'fix'; bauer: string } | { art: 'sonnet'; fehlerlogs: string[] };
+/** Rein: was folgt, wenn das Review den Sieger ablehnt. Erst der Verlierer-Diff (24 h), dann Fixrunden; nach 2 abgelehnten Fixrunden → Sonnet. */
 export function nachAblehnung(l: Lauf, grund: string, jetzt = Date.now()): Folge {
   l.logs.push(grund);
   const v = l.verlierer;
   if (v && !v.benutzt && jetzt - v.at <= VERLIERER_MS) { v.benutzt = true; return { art: 'verlierer', bauer: v.bauer, diff: v.diff }; }
-  if (l.sieger?.bauer === GLM || l.sieger?.bauer === OPUS) return { art: 'fix', bauer: l.sieger.bauer };
+  if (l.sieger?.bauer === OPUS) return { art: 'fix', bauer: l.sieger.bauer };
   l.fixrunden++;
-  return l.fixrunden > 2 ? { art: 'eskalation', bauer: GLM, fehlerlogs: l.logs } : { art: 'fix', bauer: l.sieger?.bauer ?? FLASH };
+  return l.fixrunden > 2 ? { art: 'sonnet', fehlerlogs: l.logs } : { art: 'fix', bauer: l.sieger?.bauer ?? FLASH };
 }

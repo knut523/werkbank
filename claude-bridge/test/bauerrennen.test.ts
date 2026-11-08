@@ -91,29 +91,29 @@ test('Rennen: beide bauen, Sieger gewählt, Verlierer 24 h aufgehoben, Ledger me
   assert.deepEqual(d.ev[0].bauer, [FLASH, DEEPSEEK]); assert.equal(d.ev[0].sieger, DEEPSEEK); assert.equal(d.ev[0].abgelehnt[0].bauer, FLASH);
 });
 
-test('Rennen: Schutzzone → nur Opus; beide scheitern → glm-5.3 mit beiden Fehlerlogs', async () => {
+test('Rennen: Schutzzone → nur Opus; beide scheitern → derselbe erste Bauer mit beiden Fehlerlogs, dann Sonnet', async () => {
   const d1 = mk({ [OPUS]: { diff: diffN(2, 'db/migrations/1.sql') } });
   const l1 = await rennen(d1, { ...A, dateien: ['db/migrations/1.sql'] }, { env: {} });
   assert.deepEqual(d1.aufrufe, [OPUS]); assert.equal(l1.sieger?.bauer, OPUS);
   const logs: string[][] = [];
-  const d2 = mk({ [FLASH]: { diff: diffN(2), schnell: { ...gruen, tsc: false, log: 'TSFEHLER' } }, [DEEPSEEK]: { diff: diffN(2), schnell: { ...gruen, lint: false, log: 'LINTFEHLER' } }, [GLM]: { diff: diffN(5) } });
+  const d2 = mk({ [FLASH]: { diff: diffN(2), schnell: { ...gruen, tsc: false, log: 'TSFEHLER' } }, [DEEPSEEK]: { diff: diffN(2), schnell: { ...gruen, lint: false, log: 'LINTFEHLER' } } });
   const b = d2.bauen; d2.bauen = (x, a, o) => { if (o?.fehlerlogs) logs.push(o.fehlerlogs); return b(x, a, o); };
   const l2 = await rennen(d2, A, { env: {} });
-  assert.equal(l2.sieger?.bauer, GLM); assert.ok(d2.aufrufe.includes(GLM));
+  assert.equal(l2.sieger, null); assert.equal(l2.weiter, 'sonnet'); assert.deepEqual(d2.aufrufe, [FLASH, DEEPSEEK, FLASH]); assert.ok(!d2.aufrufe.includes(GLM));
   const text = logs[0].join('\n'); assert.match(text, /TSFEHLER/); assert.match(text, /LINTFEHLER/);
-  assert.deepEqual(d2.ev[0].bauer, [FLASH, DEEPSEEK, GLM]);
+  assert.deepEqual(d2.ev[0].bauer, [FLASH, DEEPSEEK, FLASH]);
 });
 
-test('Ablehnung: erst Verlierer-Diff (24 h), danach Fixrunden, nach 2 abgelehnten Fixrunden → glm-5.3', async () => {
+test('Ablehnung: erst Verlierer-Diff (24 h), danach Fixrunden, nach 2 abgelehnten Fixrunden → sonnet', async () => {
   const d = mk({ [FLASH]: { diff: diffN(8) }, [DEEPSEEK]: { diff: diffN(3) } });
   const l = await rennen(d, A, { env: {} });
   const t0 = l.verlierer!.at;
   const f1 = nachAblehnung(l, 'Review: Mangel 1', t0 + 1000);
-  assert.deepEqual([f1.art, f1.bauer], ['verlierer', FLASH]);
+  assert.deepEqual([f1.art, (f1 as any).bauer], ['verlierer', FLASH]);
   assert.equal(nachAblehnung(l, 'm2', t0 + 2000).art, 'fix');
   assert.equal(nachAblehnung(l, 'm3', t0 + 3000).art, 'fix');
   const e = nachAblehnung(l, 'm4', t0 + 4000);
-  assert.equal(e.art, 'eskalation'); assert.equal(e.bauer, GLM); assert.equal((e as any).fehlerlogs.length, 4);
+  assert.equal(e.art, 'sonnet'); assert.equal((e as any).fehlerlogs.length, 4);
   // nach Ablauf der 24 h kein Verlierer-Retry
   const l2 = await rennen(d, A, { env: {} });
   assert.equal(nachAblehnung(l2, 'x', l2.verlierer!.at + VERLIERER_MS + 1).art, 'fix');
@@ -198,4 +198,61 @@ test('P8: Deckel → Signal des Bauers abgebrochen, rennen wartet auf sein Ende'
   assert.equal(l.zerlegen, true);
   assert.ok(signale.length >= 2 && signale.every((s) => s.aborted), 'jedes Signal nach dem Deckel abgebrochen');
   assert.equal(beendet, true, 'Rückkehr erst, nachdem der Bauer den Abbruch bestätigt hat');
+});
+
+// ---- L3a (Strangprüfung): Retry-Kette nach Council — kein glm-5.3, gleicher Bauer mit Fehlerlogs, dann Sonnet ----------------------
+const rot = (log: string): Schnell => ({ ...gruen, tsc: false, log });
+/** Bauer mit Aufrufliste; `antworten[bauer]` liefert je Aufruf (0, 1, …) Diff + Schnell-Ergebnis; Schnell wird über die Diff-Marke gefunden. */
+const mkKette = (antworten: Record<string, { diff: string; schnell: Schnell }[]>) => {
+  const aufrufe: { bauer: string; fehlerlogs?: string[] }[] = [], ev: any[] = [], zaehler: Record<string, number> = {};
+  const marke = new Map<string, Schnell>();
+  const d: Deps = {
+    bauen: async (b, _a, o) => {
+      aufrufe.push({ bauer: b, fehlerlogs: o?.fehlerlogs });
+      const n = zaehler[b] = (zaehler[b] ?? -1) + 1;
+      const x = antworten[b]?.[n] ?? { diff: '', schnell: gruen };
+      const diff = x.diff + `\n# ${b}#${n}`; marke.set(diff, x.schnell);
+      return { bauer: b, ok: true, diff };
+    },
+    schnell: async (k) => marke.get(k.diff) ?? gruen,
+    ledger: (e) => ev.push(e) };
+  return { d, aufrufe, ev };
+};
+
+test('L3a: beide rot → nächster bauen-Aufruf ist derselbe erste Bauer mit beiden roten Logs, glm-5.3 nie', async () => {
+  const k = mkKette({ [FLASH]: [{ diff: diffN(2), schnell: rot('TSFEHLER') }, { diff: diffN(3), schnell: gruen }], [DEEPSEEK]: [{ diff: diffN(2), schnell: rot('LINTFEHLER') }] });
+  const l = await rennen(k.d, A, { env: {} });
+  const dritter = k.aufrufe[2];
+  assert.equal(k.aufrufe.length, 3);
+  assert.equal(dritter.bauer, FLASH);
+  const text = (dritter.fehlerlogs ?? []).join('\n'); assert.match(text, /TSFEHLER/); assert.match(text, /LINTFEHLER/);
+  assert.equal(k.aufrufe.some((x) => x.bauer === GLM), false, 'glm-5.3 wird nie gerufen');
+  assert.equal(l.sieger?.bauer, FLASH, 'grüner Retry gewinnt normal'); assert.equal(l.weiter, undefined);
+  assert.deepEqual(k.ev[0].bauer, [FLASH, DEEPSEEK, FLASH]); assert.equal(k.ev[0].sieger, FLASH);
+});
+
+test('L3a: Retry auch rot → weiter = sonnet, sieger null, kein bauen(sonnet), kein glm-5.3', async () => {
+  const k = mkKette({ [FLASH]: [{ diff: diffN(2), schnell: rot('A') }, { diff: diffN(2), schnell: rot('B') }], [DEEPSEEK]: [{ diff: diffN(2), schnell: rot('C') }] });
+  const l = await rennen(k.d, A, { env: {} });
+  assert.equal(l.weiter, 'sonnet'); assert.equal(l.sieger, null);
+  assert.deepEqual(k.aufrufe.map((x) => x.bauer), [FLASH, DEEPSEEK, FLASH]);
+  assert.equal(k.aufrufe.some((x) => x.bauer === SONNET || x.bauer === GLM), false);
+  assert.deepEqual(k.ev[0].bauer, [FLASH, DEEPSEEK, FLASH]); assert.equal(k.ev[0].sieger, null);
+});
+
+test('L3a: Deckel bei beiden Bauern → zerlegen, kein Retry, weiter ungesetzt', async () => {
+  const d = mk({});
+  d.bauen = (b, _a, o) => { d.aufrufe.push(b); return new Promise((_, rej) => o?.signal?.addEventListener('abort', () => rej(new Error('abgebrochen')))); };
+  const l = await rennen(d, A, { env: { BRIDGE_BAUER_DECKEL_S: '1' } });
+  assert.equal(l.zerlegen, true); assert.equal(l.weiter, undefined); assert.equal(l.sieger, null);
+  assert.equal(d.aufrufe.length, 2, 'kein Retry');
+});
+
+test('L3a: nachAblehnung nach 2 abgelehnten Fixrunden → { art: sonnet, fehlerlogs }', async () => {
+  const d = mk({ [FLASH]: { diff: diffN(8) }, [DEEPSEEK]: { diff: diffN(3) } });
+  const l = await rennen(d, A, { env: {} });
+  const t0 = l.verlierer!.at;
+  nachAblehnung(l, 'm1', t0 + 1000); nachAblehnung(l, 'm2', t0 + 2000); nachAblehnung(l, 'm3', t0 + 3000);
+  const e = nachAblehnung(l, 'm4', t0 + 4000);
+  assert.equal(e.art, 'sonnet'); assert.equal((e as any).bauer, undefined); assert.equal((e as any).fehlerlogs.length, 4);
 });

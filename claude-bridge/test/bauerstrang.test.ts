@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { bestofnStrang, bestofnAblehnung } from '../src/bauerstrang.ts';
-import { bauerEreignisse, statistikLaden } from '../src/bauerrennen.ts';
+import { bauerEreignisse, statistikLaden, SONNET } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
 const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' });
@@ -41,6 +41,10 @@ test('Flag an: zwei Bauer, kleinerer Diff gewinnt und landet im Strang-Worktree;
   const f = await bestofnAblehnung('x2', 'Mangel');
   assert.deepEqual(f, { art: 'verlierer', bauer: FLASH });
   assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(6));
+  // L3a: nach 2 abgelehnten Fixrunden geht die Eskalation an Sonnet, nie an glm-5.3
+  assert.equal(await bestofnAblehnung('x2', 'm2'), null); assert.equal(await bestofnAblehnung('x2', 'm3'), null);
+  const e = await bestofnAblehnung('x2', 'm4') as any;
+  assert.equal(e.art, 'eskalation'); assert.equal(e.modell, SONNET); assert.notEqual(e.modell, GLM); assert.ok(e.fehlerlogs.length >= 4);
   rmSync(wurzel, { recursive: true, force: true });
 });
 
