@@ -332,3 +332,18 @@ test('Echter Zug: Vorabbuchung und Werkbank-Abrechnung treffen sich — Ledger w
     proc.kill(); web.close();
   }
 });
+
+test('Persistenz: Speichern durch Person B verliert die geladene, noch nicht angefasste Person A nicht', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
+  k.budgetPersistenz(f);
+  k.budgetAnker('A', { stand: 243_000, echt: true }, TAG, {});
+  k.budgetAnker('B', { stand: 243_000, echt: true }, TAG, {});
+  const bis = k.budgetFehler('A', TAG, {});
+  k.budgetPersistenz(f);                         // Neustart: A und B nur in `geladen`, noch nicht instanziiert
+  k.budgetFehler('B', TAG, {});                  // nur B wird angefasst → speichern()
+  const j = JSON.parse(readFileSync(f, 'utf8'));
+  assert.ok(j.zustaende.A, 'A steht noch in der Datei');
+  assert.equal(j.zustaende.A.breakerBis, bis);
+  k.budgetPersistenz(f);                         // und nach erneutem Neustart wirkt A's Breaker noch
+  assert.match(k.budgetGrund('A', 'bauer', TAG + 60_000, {}), /Breaker|Energie-Budget/);
+});

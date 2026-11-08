@@ -129,7 +129,7 @@ const FELDER = ['eimer', 'eimerAt', 'reserve', 'stand', 'standAt', 'echt', 'echt
 function speichern() {
   if (!datei) return;
   try {
-    const out: Record<string, any> = {};
+    const out: Record<string, any> = { ...geladen };   // geladene, noch nicht angefasste Personen nie verlieren; Instanziierte überschreiben unten
     for (const [u, z] of zustaende) out[u] = { ...Object.fromEntries(FELDER.map((f) => [f, (z as any)[f]])), offen: [...z.offen.values()] };
     writeFileSync(datei + '.tmp', JSON.stringify({ v: 1, zustaende: out }));
     renameSync(datei + '.tmp', datei);
