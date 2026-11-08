@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, strangStandardModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -147,7 +147,7 @@ const SECRET_ENV = /KEY|SECRET|TOKEN|PASSWORD|CREDS|CREDENTIAL|_IV$|MONGO_URI|DA
 // Leitstand (Plan 132, S1): mehr Schritte und Zeit je Zug.
 const leitMaxTurns = () => Number(process.env.LEITSTAND_MAX_TURNS || 200);
 const leitTimeoutMs = () => Number(process.env.LEITSTAND_TURN_TIMEOUT_S || 3600) * 1000;
-const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? KAPPUNG.schritte[orchMap[live.key]?.rolle ?? 'leser'] : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
+const turnLimit = (live: { key: string; orch: boolean; leit?: boolean; worker?: boolean }) => (live.leit ? leitMaxTurns() : live.worker ? turnLimitRolle(orchMap[live.key]?.rolle ?? 'leser') : live.orch ? cfg.orchMaxTurns * (orchMap[live.key]?.tiefe === 'deep' ? 2 : 1) : cfg.maxTurns);
 
 // Leerlauf (RAM, 11.10.2026): eine Claude-Sitzung, die nur auf „ja/nein“ wartet, hält ihren Prozess samt MCP-Servern
 // (gemessen ≈ 420 MB je Chat). Nach BRIDGE_IDLE_REAP_S (Vorgabe 900 s = 15 min, 0 = aus) wird sie beendet; die
@@ -1912,6 +1912,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
     const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model ?? (!mel && live.orch && !live.leit ? strangStandardModell() : undefined);
     if (model) options.model = model; else delete options.model;
+    // B2: Lese-Jobs mit effort low (nur Claude; Melious ignoriert/kennt es nicht sicher).
+    { const eff = !mel && (profil === 'leser' || (live.worker && orchMap[key]?.rolle === 'leser')) ? effortLesen() : undefined; if (eff) options.effort = eff; else delete options.effort; }
     live.onClaude = live.worker && !mel;
     live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
     live.modelSeen = undefined;
@@ -2574,7 +2576,7 @@ async function claudeVerifizierer(live: Live, req: TurnRequest, prompt: string, 
   let text = '', usage: MeliousUsage | undefined, fehler = '';
   try {
     const options: Record<string, any> = {
-      cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: 40, permissionMode: 'default', abortController: abort, env, mcpServers: {},
+      cwd: wurzel, settingSources: [], skills: [], model: GATE_MODELL(), maxTurns: turnLimitRolle('endpruefung'), permissionMode: 'default', abortController: abort, env, mcpServers: {},
       allowedTools: ['Read', 'Grep', 'Glob'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'Task', 'Agent', 'WebFetch', 'WebSearch', 'AskUserQuestion'],
       canUseTool: nurLesen,
       hooks: { PreToolUse: [{ hooks: [async (i: any) => { const r = await nurLesen(i.tool_name, i.tool_input ?? {}); return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: r.behavior, permissionDecisionReason: r.behavior === 'deny' ? r.message : 'Verifizierer liest' } }; }] }] },

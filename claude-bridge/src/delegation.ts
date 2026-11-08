@@ -39,6 +39,26 @@ export const KAPPUNG = {
   pruefS: 600, pruefMaxS: 1_800, pruefAusgabe: 2_000,
 };
 
+// ---------- Turn-Limit und effort je Profil (Wave 21 B2) ----------
+
+export type TurnRolle = Rolle | 'endpruefung';
+export const TURN_START: Record<TurnRolle, number> = { leser: 30, schreiber: 40, bauer: 120, pruefer: 40, endpruefung: 40 };
+/** Später: p90 der Turns je Rolle aus dem Ledger; turnLimit setzt dann p90 × 1,25 ein (gesetzt = überschreibt den Startwert). */
+export const ledgerP90: Partial<Record<TurnRolle, number>> = {};
+/** EINE Stelle für das Schrittlimit je Rolle: Env BRIDGE_TURNS_<ROLLE> > Ledger (p90×1,25) > Startwert. BRIDGE_TURNLIMIT=aus → alte KAPPUNG.schritte. */
+export function turnLimit(rolle: TurnRolle, env: Record<string, string | undefined> = process.env, p90: Partial<Record<TurnRolle, number>> = ledgerP90): number {
+  if (env.BRIDGE_TURNLIMIT === 'aus') return rolle === 'endpruefung' ? 40 : KAPPUNG.schritte[rolle];
+  const e = Math.floor(Number(env[`BRIDGE_TURNS_${rolle.toUpperCase()}`]));
+  if (Number.isFinite(e) && e > 0) return e;
+  const l = p90[rolle];
+  return l && l > 0 ? Math.ceil(l * 1.25) : TURN_START[rolle];
+}
+/** effort für Lese-Jobs (Leser-Worker, Leser-Strang): low. BRIDGE_EFFORT_LESER=aus|medium|high …; sonst keiner (geerbt). */
+export function effortLesen(env: Record<string, string | undefined> = process.env): 'low' | 'medium' | 'high' | undefined {
+  const v = String(env.BRIDGE_EFFORT_LESER ?? 'low').trim().toLowerCase();
+  return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
+}
+
 // ---------- Abschluss-Block ----------
 
 export interface Abschluss { ziel: boolean; dateien: string[]; pruefungen: { befehl: string; ausgabe: string }[]; annahmen: string[]; widersprueche: string[]; urteil?: 'ok' | 'maengel' | 'falsch'; befunde?: string[] }
