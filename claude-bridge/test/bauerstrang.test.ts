@@ -400,3 +400,24 @@ test('Fix 4: pruefUrteil — ohne eingerichtete Prüfbefehle kein Sieger (ok:fal
   const rot = pruefUrteil({ eingerichtet: true, ergebnisse: [gruen, { ...gruen, name: 'tsc', ok: false, ausgabe: 'TS2322' }] });
   assert.equal(rot.ok, false); assert.equal(rot.tsc, false); assert.equal(rot.lint, true); assert.match(rot.log, /tsc: TS2322/);
 });
+
+test('Fix 4b: Repo ohne Prüfbefehle → Rennen gar nicht gestartet (kein Zug, Statistik unverändert), Sonnet-Übergabe mit klarem Grund, im Ledger sichtbar', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const stat = join(wurzel, 'bauerstatistik.json'); const ev: any[] = []; const h = (e: any) => ev.push(e); bauerEreignisse.on('lauf', h);
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx4b', prompt: 'ändere src/a.ts', env: {}, statistikPfad: stat, zug: zug({}), pruefe, eingerichtet: async () => false } as any);
+    assert.equal(gebaut.length, 0, 'zug nie gerufen');
+    assert.equal(existsSync(stat), false, 'Statistik nicht angefasst'); assert.deepEqual(statistikLaden(stat), { laeufe: 0, zweitSiege: 0 });
+    assert.deepEqual(r, { ok: false, text: '', grund: 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein Best-of-N, Sonnet baut' });
+    assert.ok(ev.find((x) => x.id === 'fx4b')?.gateLog.some((l: string) => /keine Prüfbefehle eingerichtet/.test(l)), 'Ledger/gateLog');
+    assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n');
+  } finally { bauerEreignisse.off('lauf', h); rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('Fix 4b: Repo mit Prüfbefehlen → Rennen läuft wie bisher, Statistik wird gezählt', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0; const stat = join(wurzel, 'bauerstatistik.json');
+  try {
+    const r = await bestofnStrang({ cwd, id: 'fx4c', prompt: 'ändere src/a.ts', env: {}, statistikPfad: stat, zug: zug({ [FLASH]: 6, [DEEPSEEK]: 2 }), pruefe, eingerichtet: async () => true } as any);
+    assert.equal(r?.ok, true); assert.equal(gebaut.length, 2); assert.equal(statistikLaden(stat).laeufe, 1);
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});

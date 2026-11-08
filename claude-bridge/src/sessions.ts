@@ -21,7 +21,7 @@ import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
 import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, speichereStand } from './uebergabe.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, pruefBefehle, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { starte, beenden, liste, type Eintrag } from './prozesse.ts';
@@ -2772,7 +2772,7 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
     async bauen(p, runde) {
       if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
       // Best-of-N (bauerrennen.ts, BRIDGE_BESTOFN=aus schaltet ab): erster Zug = zwei Bauer, danach Verlierer-Retry/Eskalation statt Fix.
-      if (runde === 1) { const b = await bestofnStrang({ cwd, id: bestofnId(live.key), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
+      if (runde === 1) { const b = await bestofnStrang({ cwd, id: bestofnId(live.key), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, eingerichtet: async () => !!(await pruefBefehle(cwd, await strangFest(live.key, cwd)))?.list.length, userId: req.userId }); if (b) return b; }
       else { const f = await bestofnAblehnung(bestofnId(live.key), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; const z = ablehnungsZiel(f); if (z) return z; }   // Eskalation = Sonnet-Klasse: ok:false → Claude-Rückfall, nie 'sonnet' auf OC2
       emitStatus(live, `⏳ opencode 2 (Melious ${modell}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
       const t0 = Date.now();

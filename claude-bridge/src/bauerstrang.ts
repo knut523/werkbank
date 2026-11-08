@@ -19,6 +19,8 @@ export interface StrangRennen {
   zug(dir: string, modell: string, prompt: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; grund: string }>;
   /** Prüfbefehle des Repos (tsc/lint = schnell, alles = voll) im Worktree; die Semaphor-Klammer setzt dieses Modul. */
   pruefe(dir: string, base: string, art: 'schnell' | 'voll'): Promise<{ ok: boolean; log: string; tsc?: boolean; lint?: boolean }>;
+  /** Hat das Repo konfigurierte Prüfbefehle (.werkbank/pruefungen.json)? false → kein Rennen: ohne Prüfung gäbe es keinen belegbaren Sieger. Nicht gesetzt = Rennen wie bisher. */
+  eingerichtet?(): Promise<boolean>;
   status?(t: string): void;
 }
 export type StrangAusgang = { ok: boolean; text: string; grund: string; modell?: string } | null;
@@ -74,6 +76,12 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   // Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten oder Melious leer → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus.
   const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return sonnetUebergabe();
+  // Vor dem Rennen entscheiden: ohne Prüfbefehle wäre jeder Kandidat rot (drei verschwendete Bauer-Läufe) und die Statistik würde vergiftet (zaehle(stat, null)).
+  if (o.eingerichtet && !(await o.eingerichtet().catch(() => true))) {
+    const grund = 'keine Prüfbefehle eingerichtet (.werkbank/pruefungen.json) — kein Best-of-N, Sonnet baut';
+    emittiereLauf({ id: o.id, bauer: [], sieger: null, abgelehnt: [], gateLog: [grund] } as Parameters<typeof emittiereLauf>[0]);
+    return { ok: false, text: '', grund };
+  }
   let zone = false;
   const schleifeAn = String(env.BRIDGE_STRANGPRUEFUNG ?? '').trim().toLowerCase() !== 'aus';   // L2-Schalter, Standard an
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
