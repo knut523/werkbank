@@ -3,6 +3,7 @@
 // Der Ablauf (Worker starten, warten, Ergebnis) steht in sessions.ts (startDelegation), weil er den Zugablauf mitbenutzt.
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, symlinkSync, mkdirSync, statSync, readFileSync, appendFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
@@ -63,7 +64,8 @@ export function effortLesen(env: Record<string, string | undefined> = process.en
 
 /** Eine Review je (headSha, baseSha, Zahl neuer Kommentare) nur einmal. Pass C (plan-to-pr) und Brücken-Prüfer gelten als dieselbe Prüfung. */
 export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.BRIDGE_REVIEW_DEDUPE !== 'aus';
-export const reviewSchluessel = (k: { headSha: string; baseSha: string; kommentare?: number }) => `${k.headSha}|${k.baseSha}|${k.kommentare ?? 0}`;
+/** `baum`: Hash der uncommitteten Änderungen (nur bei schmutzigem Baum) — sonst erbt ein anderer Dirty-Stand auf demselben Kopf ein altes „ok“. */
+export const reviewSchluessel = (k: { headSha: string; baseSha: string; kommentare?: number; baum?: string }) => `${k.headSha}|${k.baseSha}|${k.kommentare ?? 0}${k.baum ? `|${k.baum}` : ''}`;
 export interface Urteil { urteil: 'ok' | 'maengel' | 'falsch'; befunde: string[]; von: string; at: number }
 const urteile = new Map<string, Urteil>();
 export function urteilMerken(schluessel: string, u: Urteil): void {
@@ -261,7 +263,16 @@ export async function removeWorktree(dir: string): Promise<void> {
   await git(top, 'worktree', 'remove', '--force', dir);
 }
 
-export interface GitStand { kopf: string; dateien: string[]; stat: string; dirty: string[]; hunk: string; commits: number }
+export interface GitStand { kopf: string; dateien: string[]; stat: string; dirty: string[]; hunk: string; commits: number; baum?: string }
+/** Hash der uncommitteten Änderungen (git diff HEAD + Inhalt der unversionierten Dateien); '' bei sauberem Baum. */
+export async function baumHash(dir: string): Promise<string> {
+  const diff = (await git(dir, 'diff', 'HEAD')).out;
+  const neu = (await git(dir, 'ls-files', '--others', '--exclude-standard')).out.split('\n').filter((f) => f && !/(^|\/)node_modules\//.test(f)).sort();
+  if (!diff && !neu.length) return '';
+  const h = createHash('sha256').update(diff);
+  for (const f of neu) { h.update(`\0${f}\0`); try { h.update(readFileSync(join(dir, f))); } catch { /* weg */ } }
+  return h.digest('hex').slice(0, 16);
+}
 export async function gitStand(dir: string, base: string): Promise<GitStand> {
   const kopf = (await git(dir, 'rev-parse', 'HEAD')).out.trim();
   const dateien = (await git(dir, 'diff', '--name-only', `${base}..HEAD`)).out.split('\n').filter(Boolean);
@@ -272,7 +283,8 @@ export async function gitStand(dir: string, base: string): Promise<GitStand> {
   const diff = (await git(dir, 'diff', '-U2', `${base}..HEAD`)).out;
   const hunks = diff.split(/\n(?=@@ )/).slice(1);
   const hunk = hunks.sort((a, b) => b.length - a.length)[0]?.slice(0, 1500) ?? '';
-  return { kopf, dateien, stat, dirty, hunk, commits };
+  const baum = dirty.length ? await baumHash(dir) : '';
+  return { kopf, dateien, stat, dirty, hunk, commits, ...(baum ? { baum } : {}) };
 }
 
 export interface PruefBefehl { name: string; befehl: string[]; ordner?: string; zeitS?: number }

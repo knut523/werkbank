@@ -53,3 +53,30 @@ test('B4: Runde 1 und „vor Push“ voll; ab Runde 2 nur Delta und nur Blocker;
   assert.match(pruefAuftrag({ ofId: 'd-2', runde: 2 }, { BRIDGE_PRUEF_DELTA: 'aus' }), /voller Durchgang/);
   assert.match(pruefAuftrag({ ofId: 'd-2', runde: 1, hinweis: 'achte auf X' }), /Hinweis des Leads: achte auf X/);
 });
+
+import { mkdtempSync, writeFileSync as wf } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pj } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { gitStand } from '../src/delegation.ts';
+import { pruefSchluessel } from '../src/sessions.ts';
+
+test('B3-Fix: gleicher Kopf, andere uncommittete Änderung → anderer Schlüssel, kein geerbtes „ok“', async () => {
+  _urteileLeeren();
+  const d = mkdtempSync(pj(tmpdir(), 'dirty-'));
+  const g = (...a: string[]) => execFileSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=t', ...a], { cwd: d });
+  g('init', '-q'); wf(pj(d, 'a.txt'), '1\n'); g('add', '.'); g('commit', '-qm', 'x');
+  const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: d }).toString().trim();
+  const sauber = await gitStand(d, base);
+  wf(pj(d, 'a.txt'), '2\n');
+  const eins = await gitStand(d, base);
+  wf(pj(d, 'a.txt'), '3\n'); wf(pj(d, 'neu.txt'), 'x');
+  const zwei = await gitStand(d, base);
+  assert.equal(sauber.baum, undefined);
+  assert.ok(eins.baum && zwei.baum && eins.baum !== zwei.baum);
+  const mk = (git: any) => ({ git, wt: { base } }) as any;
+  const k1 = pruefSchluessel(mk(eins))!, k2 = pruefSchluessel(mk(zwei))!;
+  urteilMerken(k1, { urteil: 'ok', befunde: [], von: 'p1', at: 1 });
+  assert.equal(urteilZu(k1)?.urteil, 'ok');
+  assert.equal(urteilZu(k2), undefined, 'anderer Dirty-Stand → Prüfer wird gestartet');
+});

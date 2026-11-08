@@ -900,3 +900,10 @@ test('B6: Limit wartet bis resetsAt, Überlast Backoff, „wartet auf Eingabe“
   const stE = orchStatus(run, ok as any, ai('Ich pausiere. Der Strang wartet auf Eingabe.'), T0 + 61_500);
   assert.match(stE.reason, /braucht_dich/); assert.equal(stE.cause, undefined);
 });
+
+test('Auto-weiter: bekanntes resetsAt (Wochenlimit, >6 h) schlägt die 6-h-Regel', () => {
+  const s = { running: false, interrupted: false, turn: { start: T0 + 1000, end: T0 + 60_000, outcome: 'rate_limit', resetsAt: T0 + 60_000 + 20 * 3600_000 } };
+  const now = T0 + 60_000 + AUTO_STALE_MS + 3600_000;
+  assert.equal(autoWeiter(run, { cause: 'rate_limit' }, s as any, ai('…'), ctx({ now })).action, 'wait', 'Reset in der Zukunft → warten');
+  assert.equal(autoWeiter(run, { cause: 'rate_limit' }, { ...s, turn: { ...s.turn, resetsAt: undefined } } as any, ai('…'), ctx({ now })).action, 'none', 'ohne resetsAt bleibt die 6-h-Regel');
+});
