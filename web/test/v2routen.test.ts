@@ -612,3 +612,17 @@ test('Knut 05.11. abends (1)+(2): PR-Zeile zeigt „Strang arbeitet daran“; Ak
     assert.equal((await rufe('GET', '/api/v2/prs?wer=alle', LISA)).b.zeilen[0]?.straenge, undefined, 'Nicht-Admin sieht keine Stränge');
   } finally { delete deps.prStraenge; delete deps.prAktion; }
 });
+
+test('Hauptchat beschäftigt: zwei Aufträge gleichzeitig werden beide eingereiht (Reihenfolge bleibt), nie 409', async () => {
+  const rein: string[] = [];
+  const alt = { hauptchat: deps.hauptchat, laeuftChat: deps.laeuftChat };
+  deps.hauptchat = async () => ({ conv: 'h1', url: null }); deps.laeuftChat = async () => true;
+  deps.hauptchatEinreihen = async (_u, t) => { rein.push(t); return rein.length; };
+  deps.hauptchatEingereiht = async () => rein.map((t) => ({ text: t, at: new Date(0) }));
+  try {
+    const rs = await Promise.all([rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'erster' }), rufe('POST', '/api/v2/chat', ADMIN, { ziel: 'hauptchat', text: 'zweiter' })]);
+    assert.deepEqual(rs.map((r) => r.status), [200, 200]);
+    assert.ok(rs.every((r) => r.b.eingereiht === true));
+    assert.deepEqual([...rein].sort(), ['erster', 'zweiter']);
+  } finally { deps.hauptchat = alt.hauptchat; deps.laeuftChat = alt.laeuftChat; delete deps.hauptchatEinreihen; delete deps.hauptchatEingereiht; }
+});
