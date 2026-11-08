@@ -1593,7 +1593,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   // Melious-Lage je Person VOR der Zulassung schreiben (Gegenprüfung 19: die Setzung beim Zug-Start unten kam zu spät — der
   // erste Zug las „Melious nicht frei“ und blieb in der Schlange hängen). Der Zug unten schreibt sie mit frischen Konten erneut.
-  if (req.accounts) await req.accounts().then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); setzeMelious(req.userId, !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now())); } }).catch(() => {});
+  let melBuchbar = false;   // Melious für die Person nutzbar: nur dann gibt es etwas vorab zu buchen (ohne Konto verbraucht der Zug keine Melious-Energie)
+  if (req.accounts) await req.accounts().then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); melBuchbar = !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now()); setzeMelious(req.userId, melBuchbar); } }).catch(() => {});
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1654,7 +1655,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
   // Zulassung und Buchung sind getrennte Schritte (Warteschlange, gleichzeitiger Zug derselben Person, Lage ohne Antwort): scheitert
   // die Buchung, ist das eine Ablehnung wie bei der Zulassung — der Zug startet nicht (Ursache: beides war nicht eine Entscheidung).
-  if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) {
+  if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId && melBuchbar) {
     const b = budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
     if (!b.ok) { lockGrund = b.grund || 'Energie-Budget reicht gerade nicht'; lock = 'chat-busy'; }
   }
