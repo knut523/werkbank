@@ -55,6 +55,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   // Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten oder Melious leer → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus.
   const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
   if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return { ok: false, text: '', grund: 'Sonnet-Klasse (Geld/Konten) oder Melious leer — Sonnet baut, kein Best-of-N' };
+  let zone = false;
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
   const deps: Deps = {
     async bauen(bauer, a, op) {
@@ -67,6 +68,11 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       texte.set(bauer, r.text);
       await git(s.dir, 'add', '-A');
       const diff = (await git(s.dir, 'diff', '--cached', '--binary', '--no-color', s.base)).out;
+      // Schutzzone am tatsächlichen Diff (nicht nur an Pfaden im Plantext): berührt der Kandidat sie, darf er nicht gewinnen. Abschalten: BRIDGE_DIFFZONE=aus.
+      if (String(env.BRIDGE_DIFFZONE ?? '').trim().toLowerCase() !== 'aus') {
+        const namen = (await run('git', ['-C', s.dir, '-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--no-renames', s.base], { cwd: s.dir, max: 1e7 })).out.split('\n').filter(Boolean);
+        if (inSchutzzone(namen, env)) { zone = true; return { bauer, ok: false, diff: '', log: 'Schutzzone im Diff' }; }
+      }
       return { bauer, ok: r.ok && !!diff.trim(), diff, log: r.ok ? 'keine Änderung' : r.grund };
     },
     async schnell(k): Promise<Schnell> {
@@ -82,13 +88,14 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   if (o.statistikPfad) statistikSpeichern(o.statistikPfad, stat);
   const patches = Object.fromEntries([...subs.keys()].map((b): [string, string] => [b, '']));
   const sieger = lauf.sieger;
-  const ok = !!sieger && await anwenden(o.cwd, sieger.diff);
+  const ok = !zone && !!sieger && await anwenden(o.cwd, sieger.diff);
   if (ok) {
     for (const k of [sieger!.bauer, lauf.verlierer?.bauer].filter(Boolean) as string[]) patches[k] = k === sieger!.bauer ? sieger!.diff : lauf.verlierer!.diff;
     geschlossen.set(o.id, { cwd: o.cwd, lauf, patch: sieger!.diff, patches });
     for (const k of geschlossen.keys()) { if (geschlossen.size <= 50) break; geschlossen.delete(k); }   // bounded: oldest out (loser retry only matters for 24 h)
   }
   for (const s of subs.values()) await removeWorktree(s.dir).catch(() => {});
+  if (zone) return { ok: false, text: '', grund: 'Schutzzone (Diff berührt Migration/Auth/Billing/Workflow/.env) — Opus baut, Sieger nicht angewendet' };
   if (lauf.zerlegen) return { ok: false, text: '', grund: 'Punkt zu groß (Deckel überschritten) — im Plan kleiner schneiden' };
   if (!ok) return { ok: false, text: '', grund: sieger ? 'Best-of-N: Sieger-Diff ließ sich nicht anwenden' : 'Best-of-N: kein Bauer lieferte einen sauberen Diff' };
   return { ok: true, text: texte.get(sieger!.bauer) ?? '', grund: '', modell: `${sieger!.bauer} (Best-of-N)` };
