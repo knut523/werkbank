@@ -22,7 +22,8 @@ import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, s
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, pruefAuftrag, rundeStand, rundeVermerken, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
-import { starte, beenden } from './prozesse.ts';
+import { starte, beenden, liste, type Eintrag } from './prozesse.ts';
+import { waechterZustand } from './waechter.ts';
 import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
@@ -638,9 +639,40 @@ function setTurn(key: string, turn: OrchEntry['turn']) {
   try { saveMap(); } catch (e: any) { log('orch speichern fehlgeschlagen', { conv: key, error: String(e?.message ?? e).slice(0, 120) }); }
 }
 
+/** R11: Anzeigeform eines Registereintrags — nur Befehl und Zeiten, nie die Umgebung oder Geheimnisse. */
+export interface ProzessSicht {
+  besitzer: string; art: string; cmd: string;
+  laufzeitS: number; zuletztAktivS: number; fristAt: number | null;
+  zustand: 'läuft' | 'checkin' | 'überfällig';
+}
+/** Gehört der Eintrag zu diesem Strang? Genau der Schlüssel oder ein Untereintrag `<schlüssel>#…`. */
+const meinProzess = (besitzer: string, key: string) => besitzer === key || besitzer.startsWith(`${key}#`);
+
+/**
+ * Reine Abbildung: Prozessregister + Wächterzustand → Anzeige. Zeiten in ganzen Sekunden relativ zu `jetzt`.
+ * Ohne `besitzer` alle Einträge (für den Feed über alle Stränge), mit `besitzer` nur die des Strangs.
+ */
+export function prozessSicht(
+  eintraege: Pick<Eintrag, 'id' | 'besitzer' | 'art' | 'cmd' | 'startedAt' | 'zuletztAktiv' | 'fristAt'>[],
+  zustaende: Pick<ReturnType<typeof waechterZustand>[number], 'id' | 'zustand'>[],
+  jetzt: number,
+  besitzer?: string,
+): ProzessSicht[] {
+  const zustandVon = new Map(zustaende.map((z) => [z.id, z.zustand]));
+  const sek = (ms: number) => Math.max(0, Math.floor(ms / 1000));
+  return eintraege.filter((e) => !besitzer || meinProzess(e.besitzer, besitzer)).map((e) => ({
+    besitzer: e.besitzer, art: e.art, cmd: e.cmd.slice(0, 120),
+    laufzeitS: sek(jetzt - e.startedAt), zuletztAktivS: sek(jetzt - e.zuletztAktiv),
+    fristAt: e.fristAt ?? null, zustand: zustandVon.get(e.id) ?? 'läuft',
+  }));
+}
+
 /** Zustand aller Stränge einer Person: läuft jetzt? letzter Zug (Start/Ende/Ausgang), abgebrochen durch Neustart? */
 export function orchStateOf(userId: string) {
   const prefix = safeId(userId) + ':';
+  const register = liste();
+  const zustaende = waechterZustand();
+  const jetzt = Date.now();
   return Object.entries(orchMap).filter(([k, e]) => k.startsWith(prefix) && e.kind !== 'worker').map(([k, e]) => {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
@@ -654,6 +686,8 @@ export function orchStateOf(userId: string) {
       // Paket 436 (Runde 7, Knut: „Unterchats sind intransparent“): die letzte Statuszeile des laufenden Zugs — was er gerade tut.
       jetzt: l?.lastStatus ?? null,
       zugTokens: l ? (l.usage.input ?? 0) + (l.usage.output ?? 0) : null,   // grob, nur der laufende Zug
+      // R11: die laufenden Prozesse dieses Strangs (auch `#endpruefung`), für die Anzeige „Arbeit“.
+      processes: prozessSicht(register, zustaende, jetzt, k),
     };
   });
 }

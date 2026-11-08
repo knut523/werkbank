@@ -11,7 +11,9 @@ import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { drain, drainSek } from './schlange.ts';
-import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sitzungsKey, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, type Sink, type Tiefe } from './sessions.ts';
+import { liste } from './prozesse.ts';
+import { waechterZustand } from './waechter.ts';
+import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sitzungsKey, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, prozessSicht, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
 import { budgetAbrechnen, budgetMelder } from './kapazitaet.ts';
 import { orchDirProblem } from './tools.ts';
@@ -493,6 +495,15 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
       return json(res, 200, { strands: orchStateOf(url.searchParams.get('user') ?? '') });
+    }
+    // R11: die laufenden Prozesse einer Person aus dem Register (Anzeige „Arbeit“), je Eintrag mit besitzer.
+    if (req.method === 'GET' && url.pathname === '/internal/prozesse') {
+      if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
+      // Nur die Prozesse der angefragten Person — nie eine Liste über alle Personen.
+      const user = url.searchParams.get('user') ?? '';
+      if (!user) return json(res, 400, { error: 'user fehlt' });
+      const prefix = safeId(user) + ':';
+      return json(res, 200, prozessSicht(liste().filter((e) => e.besitzer.startsWith(prefix)), waechterZustand(), Date.now()));
     }
     // Ein bestätigter MCP-Aufruf (Jira-Schreiben vom Board) bzw. der MCP-Status — nur für Werkbank-Web.
     if (req.method === 'POST' && (url.pathname === '/internal/mcp-call' || url.pathname === '/internal/mcp-status')) {
