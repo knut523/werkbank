@@ -4,6 +4,7 @@ import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bauerFuer, inSchutzzone, inSonnetzone, tamperGruende, waehle, rennen, nachAblehnung, Semaphor, neueStatistik, zaehle, abgeschaltet, bestofnAn, bauerDeckelMs, diffGroesse, pruefLauf, groupKill, OPUS, SONNET, VERLIERER_MS, type Deps, type Schnell, type BauErgebnis } from '../src/bauerrennen.ts';
+import { laeuft, gruppeWeg } from '../src/prozesse.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
 const gruen: Schnell = { tsc: true, lint: true, tests: true };
@@ -171,8 +172,9 @@ test('P7: Timeout tötet die ganze Gruppe (Enkel sleep 600)', async () => {
   const r = await pruefLauf(cwd, 'sh', ['-c', 'sleep 600 & echo $$ > pgid; echo $! > enkel; wait'], { timeoutMs: 2000 });
   assert.equal(r.ok, false);
   const enkel = Number(readFileSync(join(cwd, 'enkel'), 'utf8'));
-  assert.throws(() => process.kill(enkel, 0), { code: 'ESRCH' });
-  assert.throws(() => process.kill(-Number(readFileSync(join(cwd, 'pgid'), 'utf8')), 0), { code: 'ESRCH' });
+  // 'läuft nicht' = weg oder Zombie; pruefLauf kehrt erst zurück, wenn kein Gruppenmitglied mehr läuft (keine Wartezeit hier).
+  assert.equal(laeuft(enkel), false, 'Enkel läuft nicht mehr');
+  assert.equal(await gruppeWeg(Number(readFileSync(join(cwd, 'pgid'), 'utf8')), 0), true, 'Gruppe weg');
 });
 test('P7: Kill einer toten Gruppe wirft nicht', () => {
   assert.doesNotThrow(() => groupKill(2 ** 22 - 1));
@@ -183,7 +185,7 @@ test('P7: Kind endet mit 0, Enkel hält die Pipe → Rückkehr schnell, ok, Grup
   const r = await pruefLauf(cwd, 'sh', ['-c', 'sleep 600 & echo $! > enkel; echo $$ > pgid; exit 0'], { timeoutMs: 30000 });
   assert.ok(Date.now() - t0 < 3000, `dauerte ${Date.now() - t0} ms`);
   assert.equal(r.ok, true);
-  assert.throws(() => process.kill(Number(readFileSync(join(cwd, 'enkel'), 'utf8')), 0), { code: 'ESRCH' });
+  assert.equal(laeuft(Number(readFileSync(join(cwd, 'enkel'), 'utf8'))), false, 'Enkel läuft nicht mehr');
 });
 
 // ---- P8: Deckel bricht den Bauer ab (Signal), statt ihn im Hintergrund auslaufen zu lassen -----------------------------------------

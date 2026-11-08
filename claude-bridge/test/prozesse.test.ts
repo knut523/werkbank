@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { starte, beenden, liste, aktivitaet, registerDatei, vorlaufLesen, procStart, lebt, beendenProz } from '../src/prozesse.ts';
+import { spawn } from 'node:child_process';
+import { starte, beenden, liste, aktivitaet, registerDatei, vorlaufLesen, procStart, lebt, beendenProz, laeuft } from '../src/prozesse.ts';
 
 const tot = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e: any) { return e.code === 'ESRCH'; } };
 const warte = async (f: () => boolean, ms = 5000) => { for (let t = 0; t < ms && !f(); t += 50) await new Promise((r) => setTimeout(r, 50)); return f(); };
@@ -78,4 +79,16 @@ test('Leader endet, Enkel lebt in der Gruppe → Gruppe wird beendet, Eintrag we
     assert.ok(await warte(() => tot(enkel)), 'Enkel tot');
     assert.equal(liste().some((x) => x.id === id), false);
   } finally { try { process.kill(enkel, 'SIGKILL'); } catch { /* weg */ } }
+});
+
+test('beendenProz: Leader endet auf TERM, Enkel ignoriert TERM → Enkel wird trotzdem beendet', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'term-'));
+  const k = spawn('sh', ['-c', `(trap '' TERM; exec sleep 600) & echo $! > ${dir}/enkel; wait`], { detached: true, stdio: 'ignore' });
+  let enkel = 0;
+  try {
+    for (let i = 0; i < 100 && !enkel; i++) { try { enkel = Number(readFileSync(join(dir, 'enkel'), 'utf8')); } catch { await new Promise((r) => setTimeout(r, 20)); } }
+    assert.ok(enkel > 0, 'Enkel gestartet');
+    assert.equal(await beendenProz({ pid: k.pid!, start: procStart(k.pid!) }, 500), true);
+    assert.equal(laeuft(enkel), false, 'Enkel läuft nicht mehr');
+  } finally { try { process.kill(-k.pid!, 'SIGKILL'); } catch { /* weg */ } }
 });

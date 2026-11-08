@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { FLASH, DEEPSEEK, GLM } from './modellwahl.ts';
+import { gruppeWeg } from './prozesse.ts';
 
 type Env = Record<string, string | undefined>;
 export const OPUS = 'opus';
@@ -144,7 +145,9 @@ export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { se
   const kind = spawn(cmd, args, { cwd, detached: true, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
   const an = (d: Buffer) => { log = (log + d).slice(-8000); };
   kind.stdout.on('data', an); kind.stderr.on('data', an);
-  const ende = (ok: boolean, zusatz = '') => { if (fertig) return; fertig = true; clearTimeout(t); if (kind.pid) groupKill(kind.pid); res({ ok, log: (log + zusatz).slice(-4000) }); };
+  const ende = (ok: boolean, zusatz = '') => { if (fertig) return; fertig = true; clearTimeout(t); const r = { ok, log: (log + zusatz).slice(-4000) };
+    // Rückkehr erst, wenn kein Gruppenmitglied mehr läuft: der Aufrufer darf danach z. B. den Worktree entfernen.
+    if (kind.pid) { groupKill(kind.pid); void gruppeWeg(kind.pid).then(() => res(r)); } else res(r); };
   let zeit = false;
   const t = setTimeout(() => { zeit = true; if (kind.pid) groupKill(kind.pid); }, o.timeoutMs ?? 15 * 60_000); // Ergebnis erst bei 'close': Kind ist dann abgeholt, kein Zombie in der Gruppe
   kind.on('error', (e) => ende(false, String(e)));
