@@ -32,7 +32,7 @@ const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK ==
 import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
-import { bestofnStrang, bestofnAblehnung } from './bauerstrang.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from './bauerstrang.ts';
 import { bauZug, linksNachDraussen, urteilAus, verifiziererPrompt, MAX_RUNDEN, type BauDeps, type Verdikt } from './oc2strang.ts';
 import { oc2McpToken } from './oc2mcp.ts';
 import { testkontoNamen, zieleText } from './klick.ts';
@@ -2756,13 +2756,12 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
     async bauen(p, runde) {
       if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
       // Best-of-N (bauerrennen.ts, BRIDGE_BESTOFN=aus schaltet ab): erster Zug = zwei Bauer, danach Verlierer-Retry/Eskalation statt Fix.
-      let modellNutzen = modell;
       if (runde === 1) { const b = await bestofnStrang({ cwd, id: live.key.slice(-12), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
-      else { const f = await bestofnAblehnung(live.key.slice(-12), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; if (f?.art === 'eskalation') { modellNutzen = f.modell; p += `\n\n## Fehlerlogs der bisherigen Runden\n${f.fehlerlogs.join('\n---\n').slice(-6000)}`; } }
-      emitStatus(live, `⏳ opencode 2 (Melious ${modellNutzen}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
+      else { const f = await bestofnAblehnung(live.key.slice(-12), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; const z = ablehnungsZiel(f); if (z) return z; }   // Eskalation = Sonnet-Klasse: ok:false → Claude-Rückfall, nie 'sonnet' auf OC2
+      emitStatus(live, `⏳ opencode 2 (Melious ${modell}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
       const t0 = Date.now();
       const r = await pool.zug({
-        cwd, prompt: p, model: modellNutzen, timeoutS: envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60), abbruch: () => live.abort.signal.aborted, titel: `strang ${live.key.slice(-8)}`,
+        cwd, prompt: p, model: modell, timeoutS: envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60), abbruch: () => live.abort.signal.aborted, titel: `strang ${live.key.slice(-8)}`,
         rechte: oc2Schreibrechte(linksNachDraussen(cwd), ['werkbank_*']), sitzung: e.oc2?.sitzung, server: e.oc2?.server,
         mcp: { name: 'werkbank', config: { type: 'remote', url: `http://127.0.0.1:${Number(process.env.BRIDGE_PORT || 3090)}/oc2-mcp`, headers: { authorization: `Bearer ${oc2McpToken(req.userId, req.convId)}` } } },
         pruefe: (n) => oc2SchreibtDraussen(n, (x) => !!schreibzielProblem(x, cwd)),
