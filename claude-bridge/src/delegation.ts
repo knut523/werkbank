@@ -59,6 +59,21 @@ export function effortLesen(env: Record<string, string | undefined> = process.en
   return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
 }
 
+// ---------- Review-Dedupe (Wave 21 B3) ----------
+
+/** Eine Review je (headSha, baseSha, Zahl neuer Kommentare) nur einmal. Pass C (plan-to-pr) und Brücken-Prüfer gelten als dieselbe Prüfung. */
+export const dedupeAn = (env: Record<string, string | undefined> = process.env) => env.BRIDGE_REVIEW_DEDUPE !== 'aus';
+export const reviewSchluessel = (k: { headSha: string; baseSha: string; kommentare?: number }) => `${k.headSha}|${k.baseSha}|${k.kommentare ?? 0}`;
+export interface Urteil { urteil: 'ok' | 'maengel' | 'falsch'; befunde: string[]; von: string; at: number }
+const urteile = new Map<string, Urteil>();
+export function urteilMerken(schluessel: string, u: Urteil): void {
+  urteile.delete(schluessel); urteile.set(schluessel, u);
+  while (urteile.size > 200) urteile.delete(urteile.keys().next().value!);
+}
+/** Vorhandenes Urteil zum Schlüssel (nur mit Dedupe an). */
+export const urteilZu = (schluessel: string, env: Record<string, string | undefined> = process.env): Urteil | undefined => (dedupeAn(env) ? urteile.get(schluessel) : undefined);
+export const urteileLeeren = () => urteile.clear();
+
 // ---------- Abschluss-Block ----------
 
 export interface Abschluss { ziel: boolean; dateien: string[]; pruefungen: { befehl: string; ausgabe: string }[]; annahmen: string[]; widersprueche: string[]; urteil?: 'ok' | 'maengel' | 'falsch'; befunde?: string[] }

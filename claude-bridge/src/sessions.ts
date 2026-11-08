@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, reviewSchluessel, urteilMerken, urteilZu, strangStandardModell, turnLimit as turnLimitRolle, effortLesen, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -3032,6 +3032,8 @@ async function delegationLauf(d: Deleg): Promise<void> {
     // Volle Antwort ins Protokoll (eigener Scratch des Leads — dort darf er lesen); an den Lead geht höchstens KAPPUNG.ergebnis.
     try { const dir = join(scratchFor(d.userId), 'delegationen'); mkdirSync(dir, { recursive: true }); d.protokoll = join(dir, `${d.id}.md`); writeFileSync(d.protokoll, d.text); } catch { d.protokoll = undefined; }
     if (d.status !== 'fertig') await dropWorktree(d).catch(() => {});
+    // B3: Urteil des Prüfers unter (Kopf, Basis, Kommentare) merken — derselbe Stand wird nicht noch einmal geprüft.
+    if (d.rolle === 'pruefer' && d.status === 'fertig' && d.abschluss?.urteil) { const sk = pruefSchluessel(d.pruefe ? delegs.get(d.pruefe) : undefined); if (sk) urteilMerken(sk, { urteil: d.abschluss.urteil, befunde: d.abschluss.befunde ?? [], von: d.id, at: Date.now() }); }
     log('delegation fertig', { id: d.id, rolle: d.rolle, status: d.status, modell: d.modell, abweichungen: d.abweichungen.length, ms: d.ende - d.start });
     report(d);
   }
@@ -3046,6 +3048,12 @@ function newDeleg(userId: string, parent: string, parentConv: string, rolle: Rol
   delegs.set(id, d);
   if (delegs.size > 300) for (const [k, v] of delegs) { if (v.status !== 'laeuft' && (v.urteil || !v.wt || !existsSync(v.wt.dir))) { delegs.delete(k); if (delegs.size <= 250) break; } }
   return d;
+}
+
+/** B3: Dedupe-Schlüssel eines geprüften Stands (Kopf der Delegation, Basis des Unter-Worktrees); null, wenn Kopf/Basis fehlen. */
+export function pruefSchluessel(of: Deleg | undefined, kommentare = 0): string | null {
+  const headSha = of?.git?.kopf, baseSha = of?.wt?.base;
+  return headSha && baseSha ? reviewSchluessel({ headSha, baseSha, kommentare }) : null;
 }
 
 /** Prüfer für eine fertige Bauer-/Schreiber-Delegation: Modell ≠ Autor, Klasse ≥ Autor; keiner frei → „ungeprüft“ (kein stiller Ersatz). */
@@ -3115,6 +3123,9 @@ export async function startDelegation(userId: string, convId: string, b: { rolle
     if (of.status === 'laeuft') return { ok: false, status: 409, error: `Delegation ${of.id} läuft noch — erst delegation_stand.` };
     if (of.pruefer) return { ok: false, status: 409, error: `${of.id} hat schon den Prüfer ${of.pruefer} — Ergebnis mit delegation_stand.` };
     if (of.wt && !existsSync(of.wt.dir)) return { ok: false, status: 409, error: `Der Unter-Worktree von ${of.id} ist schon weggeräumt (Urteil abgegeben).` };
+    // B3: gleicher Stand schon geprüft → vorhandenes Urteil wiederverwenden, keinen zweiten Prüfer starten.
+    const vorhanden = (() => { const sk = pruefSchluessel(of, Number((b as any).kommentare) || 0); return sk ? urteilZu(sk) : undefined; })();
+    if (vorhanden) return { ok: true, text: `Derselbe Stand (Kopf, Basis, Kommentare) ist schon geprüft (Prüfer ${vorhanden.von}): Urteil ${vorhanden.urteil}${vorhanden.befunde.length ? `\n${vorhanden.befunde.join('\n')}` : ''}\nWiederverwendet, kein neuer Prüfer gestartet.` };
     const pr = await startPruefer(of, risiko, aufgabe);
     if (!pr) return { ok: true, text: `Kein Prüfer gestartet: ${of.hinweis}` };
     return { ok: true, id: pr.id, text: `Prüfer ${pr.id} für ${of.id} gestartet (Modell ≠ Autor, Klasse ≥ Autor). Ergebnis mit delegation_stand.` };

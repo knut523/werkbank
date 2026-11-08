@@ -24,3 +24,16 @@ test('B2: effort low für Lese-Jobs, abschaltbar', () => {
   assert.equal(effortLesen({}), 'low');
   assert.equal(effortLesen({ BRIDGE_EFFORT_LESER: 'aus' }), undefined);
 });
+
+import { reviewSchluessel, urteilMerken, urteilZu, urteileLeeren } from '../src/delegation.ts';
+
+test('B3: gleicher Schlüssel (head, base, Kommentare) → vorhandenes Urteil; anderer Kommentarstand → neue Review; Schalter aus → immer neu', () => {
+  urteileLeeren();
+  const k = reviewSchluessel({ headSha: 'a1', baseSha: 'b1', kommentare: 2 });
+  assert.equal(urteilZu(k), undefined);
+  urteilMerken(k, { urteil: 'maengel', befunde: ['src/a.ts:3 hoch'], von: 'd-1', at: 1 });
+  assert.equal(urteilZu(reviewSchluessel({ headSha: 'a1', baseSha: 'b1', kommentare: 2 }))?.urteil, 'maengel');
+  assert.equal(urteilZu(reviewSchluessel({ headSha: 'a1', baseSha: 'b1', kommentare: 3 })), undefined, 'neuer Kommentar → neu');
+  assert.equal(urteilZu(reviewSchluessel({ headSha: 'a2', baseSha: 'b1', kommentare: 2 })), undefined, 'neuer Kopf → neu');
+  assert.equal(urteilZu(k, { BRIDGE_REVIEW_DEDUPE: 'aus' }), undefined);
+});
