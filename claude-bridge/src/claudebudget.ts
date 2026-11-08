@@ -9,6 +9,7 @@ const zahl = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 
 const ms = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? (n < 1e12 ? n * 1000 : n) : null; };
 const H = 3_600_000;
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 export interface KontoLage { id: string; status: 'ok' | 'unbekannt'; fuenfH: number | null; siebenT: number | null; vorPlan: boolean; resetFuenfH: number | null; resetWoche: number | null }
 
@@ -223,6 +224,7 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
   return o.profil === 'leser' ? 'leser' : 'bauer';
 }
 const meliousFrei = new Map<string, boolean>();
+const safeId = (s: string) => /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);   // wie sessions.ts; nur Schlüssel der Melious-Map, keine Töpfe
 /** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Alter Aufruf ohne userId (boolean) gilt prozessweit weiter; eine Person ohne eigenen Eintrag fällt ebenfalls darauf zurück. */
 export const setzeMelious = (userId: string | boolean, frei?: boolean) => { meliousFrei.set(typeof userId === 'boolean' ? '' : userId, typeof userId === 'boolean' ? userId : frei === true); };
 
@@ -259,7 +261,7 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
   }
   const konten = [...lagen.values()];
   if (!konten.length) return '';
-  const melOk = (o.userId !== undefined ? (meliousFrei.get(o.userId) ?? meliousFrei.get('')) : meliousFrei.get('')) ?? false;
+  const melOk = ((o.userId !== undefined ? (meliousFrei.get(safeId(o.userId)) ?? meliousFrei.get('')) : meliousFrei.get('')) ?? false) === true;
   const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: melOk ? { modell: 'melious' } : null, now });
   return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
 }

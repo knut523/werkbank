@@ -1552,7 +1552,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
     rolle: rolleVon({ leit: kind === 'leitstand', phase: orchMap[key]?.phase, profil: orchMap[key]?.profil }), rang: 1, modell: orchMap[key]?.phase ? phaseModell(orchMap[key]!.phase!).modell : undefined,
-    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft, userId: safeId(req.userId),
+    ereignis: orchMap[key]?.parent ?? key, item: key, vorgeprueft: (orchMap[key] as any)?.vorgeprueft, userId: req.userId,
     claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber',
     // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
     ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
