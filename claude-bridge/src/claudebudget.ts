@@ -78,7 +78,6 @@ export async function probeKonto(id: string, fn: () => Promise<boolean>, now: nu
   probeZ.set(id, { frei: false, fehler, bis: now + Math.min(60 * 60_000, 60_000 * 2 ** (fehler - 1)) }); speichern();
   return fehler >= BREAKER_FEHLER ? 'offen' : 'wartet';
 }
-export const probeWiderrufen = (id: string) => { probeZ.delete(id); speichern(); };
 
 // ---------- Zustand aus cswap, Einhängepunkte ----------
 const lagen = new Map<string, KontoLage>();
@@ -117,7 +116,7 @@ export function kostenPunkte(modell: string, tokens: number, env: Record<string,
   const vorgabe = num(env.BRIDGE_CLAUDE_PCT_JE_1M, 2) * (grundModell(modell) === 'opus' ? 3 : 1);
   return (k?.pctJe1M ?? vorgabe) * (tokens / 1e6);
 }
-export const lageVon = (id: string) => lagen.get(id) ?? null;
+export const _lageVon = (id: string) => lagen.get(id) ?? null;
 /** Darf das Konto in die Warteschlange? Unbekannte Konten erst nach erfolgreicher Probe; nicht registrierte immer. */
 export function kontoFrei(id: string): boolean {
   if (!budgetAn()) return true;
@@ -127,7 +126,7 @@ export function kontoFrei(id: string): boolean {
 /** Reset aus einem rate_limit-Zug ins Konto-Ledger (Wochen-/Fensterreset je Konto, Council Punkt 5). */
 const resets = new Map<string, number>();
 export const resetNotieren = (id: string, until: number) => { resets.set(id, until); speichern(); };
-export const resetVon = (id: string) => resets.get(id) ?? null;
+export const _resetVon = (id: string) => resets.get(id) ?? null;
 /** Nur für Tests. */
 export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); datei = null; };
 

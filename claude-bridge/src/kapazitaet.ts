@@ -209,7 +209,8 @@ export function buchungsBetrag(z: Pick<Zustand, 'ledger'>, jobtyp: Jobtyp): numb
   return 3 * (l.length >= 3 ? median(l) : MEDIAN_VORGABE[jobtyp]);
 }
 
-export type Zulassung = { ok: true; buchung: string | null; betrag: number; aus?: 'eimer' | 'reserve' } | { ok: false; grund: string; claude?: boolean };
+// Flat instead of a union: without strictNullChecks, TS doesn't narrow on `ok` (tsc gate 08.11.).
+export type Zulassung = { ok: boolean; buchung?: string | null; betrag?: number; aus?: 'eimer' | 'reserve'; grund?: string; claude?: boolean };
 
 function pruefe(userId: string, jobtyp: Jobtyp, now: number, env: Env): { z: Zustand; c: Cfg; betrag: number; r: Zulassung | null } {
   const c = budgetCfg(env), z = zust(userId, now, c);

@@ -34,7 +34,7 @@ test('3 Konto unbekannt: gesperrt bis Probe, Breaker + Backoff; Konto 3 per Konf
   const karte = b.kontoKarte({ BRIDGE_CLAUDE_KONTO_MAP: 'chat:1,k2:2,k3:3' });
   assert.deepEqual(Object.keys(karte), ['chat', 'k2', 'k3']);
   b.aktualisiere(cswap([acc(1, 10, 10), acc(3, 5, 5), { number: 2 }]), karte);
-  assert.equal(b.lageVon('k2')!.status, 'unbekannt'); assert.equal(b.lageVon('k3')!.status, 'ok');
+  assert.equal(b._lageVon('k2')!.status, 'unbekannt'); assert.equal(b._lageVon('k3')!.status, 'ok');
   assert.equal(b.kontoFrei('k2'), false); assert.equal(b.kontoFrei('k3'), true); assert.equal(b.kontoFrei('unregistriert'), true);
   const mk = (id: string): Account => ({ id, label: id, token: 't-' + id });
   assert.deepEqual(planQueue([mk('chat'), mk('k2'), mk('k3')], {}, { conv: 'c', chatOn: false }).map((a) => a.id).sort(), ['chat', 'k3']);
@@ -134,10 +134,10 @@ test('10 Strang wartet mit „braucht dich“, wenn alle heiß; mit Melious nich
 
 test('11 Zug gebucht: Eimer sinkt, Hauptchat-Tag wächst; Kalibrierung aus Δ% der cswap-Lesung', () => {
   b.aktualisiere(cswap([acc(1, 10, 40)]), { a: '1' });
-  const vorher = b.budgetStand(b.lageVon('a')!, T0).level;
+  const vorher = b.budgetStand(b._lageVon('a')!, T0).level;
   const pkt = b.zugGelaufen({ konto: 'a', modell: 'claude-sonnet-5', tokens: 1_000_000, hauptchat: true, now: T0 });
   assert.equal(pkt, 2);
-  assert.ok(Math.abs(b.budgetStand(b.lageVon('a')!, T0).level - (vorher - 2)) < 1e-9);
+  assert.ok(Math.abs(b.budgetStand(b._lageVon('a')!, T0).level - (vorher - 2)) < 1e-9);
   assert.equal(b.hauptchatRest(T0), 8);
   b.aktualisiere(cswap([acc(1, 12, 43)]), { a: '1' });                      // Wochen-% +3 für 1 Mio Tokens
   assert.equal(b.kalibriere().sonnet.pctJe1M, 3);
@@ -176,6 +176,6 @@ test('14 Zustand atomar auf Platte: Kalibrierung, Breaker, Hauptchat-Tag, Reset 
   b.budgetVergessen();
   assert.equal(b.hauptchatRest(T0), 10);
   b.budgetMerkeIn(f);
-  assert.equal(b.kalibriere().opus.pctJe1M, 4); assert.equal(b.hauptchatRest(T0), 7); assert.equal(b.resetVon('a'), T0 + H);
+  assert.equal(b.kalibriere().opus.pctJe1M, 4); assert.equal(b.hauptchatRest(T0), 7); assert.equal(b._resetVon('a'), T0 + H);
   assert.equal(await b.probeKonto('k2', async () => true, T0 + 1000), 'wartet');   // Backoff überlebt
 });

@@ -39,7 +39,6 @@ function speichern(): void {
 let drainAb = false;
 /** Frist in Sekunden (BRIDGE_DRAIN_SEK, Vorgabe 120); BRIDGE_DRAIN=aus: sofort beenden wie bisher. */
 export const drainSek = () => { if (String(process.env.BRIDGE_DRAIN ?? '').toLowerCase() === 'aus') return 0; const s = Number(process.env.BRIDGE_DRAIN_SEK ?? 120); return Number.isFinite(s) && s >= 0 ? s : 120; };
-export const drainAktiv = () => drainAb;
 /** Keine neuen Plätze mehr vergeben, laufende Läufe bis zur Frist beenden lassen, Schlange sichern. Gibt zurück, ob alles leer lief. */
 export async function drain(laufend: () => number, o: { fristSek?: number; takt?: number } = {}): Promise<boolean> {
   drainAb = true;

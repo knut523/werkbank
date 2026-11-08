@@ -74,12 +74,13 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   };
   const lauf = await rennen(deps, { id: o.id, plan: o.prompt, dateien }, { env, stat });
   if (o.statistikPfad) statistikSpeichern(o.statistikPfad, stat);
-  const patches = Object.fromEntries([...subs.keys()].map((b) => [b, ''] as const));
+  const patches = Object.fromEntries([...subs.keys()].map((b): [string, string] => [b, '']));
   const sieger = lauf.sieger;
   const ok = !!sieger && await anwenden(o.cwd, sieger.diff);
   if (ok) {
     for (const k of [sieger!.bauer, lauf.verlierer?.bauer].filter(Boolean) as string[]) patches[k] = k === sieger!.bauer ? sieger!.diff : lauf.verlierer!.diff;
     geschlossen.set(o.id, { cwd: o.cwd, lauf, patch: sieger!.diff, patches });
+    for (const k of geschlossen.keys()) { if (geschlossen.size <= 50) break; geschlossen.delete(k); }   // bounded: oldest out (loser retry only matters for 24 h)
   }
   for (const s of subs.values()) await removeWorktree(s.dir).catch(() => {});
   if (!ok) return { ok: false, text: '', grund: sieger ? 'Best-of-N: Sieger-Diff ließ sich nicht anwenden' : 'Best-of-N: kein Bauer lieferte einen sauberen Diff' };
@@ -98,4 +99,3 @@ export async function bestofnAblehnung(id: string, grund: string, jetzt = Date.n
   }
   return f.art === 'eskalation' ? { art: 'eskalation', modell: GLM, fehlerlogs: f.fehlerlogs } : null;
 }
-export const bestofnVergessen = (id: string) => { geschlossen.delete(id); };
