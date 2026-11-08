@@ -61,6 +61,17 @@ test('Tamper-Guard: erweiterte Import-Zeile (auch mehrzeilig) ist kein Tamper, e
   assert.equal(tamperGruende(kopf + "-import { a } from '../src/a.ts';\n+import { a, b } from '../src/a.ts';\n-  assert.equal(a(), 1);").length, 1);
 });
 
+test('Tamper-Guard: Import-Quelle entfernt/umgelenkt in bestehender Testdatei ist Tamper, Erweiterung derselben Quelle nicht', () => {
+  const t = 'test/a.test.ts';
+  const kopf = `diff --git a/${t} b/${t}\n--- a/${t}\n+++ b/${t}\n`;
+  const r1 = tamperGruende(kopf + "-import assert from 'node:assert/strict';\n+import assert from './fake-assert.ts';");
+  assert.equal(r1.length, 1); assert.match(r1[0], /Import-Quelle entfernt\/umgelenkt \(„node:assert\/strict“\)/);
+  assert.equal(tamperGruende(kopf + "-import { a } from '../src/a.ts';\n-import '../src/setup.ts';").length, 2);
+  assert.deepEqual(tamperGruende(kopf + "-import { a } from '../src/x.ts';\n+import { a, b } from '../src/x.ts';"), []);
+  assert.deepEqual(tamperGruende(kopf + "-import {\n-  a,\n-} from '../src/x.ts';\n+import {\n+  a,\n+  b,\n+} from '../src/x.ts';"), []);
+  assert.deepEqual(tamperGruende(`diff --git a/test/n.test.ts b/test/n.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/test/n.test.ts\n+import assert from './fake.ts';`), []);
+});
+
 test('Auswahl: Tamper disqualifiziert den kleineren Diff; sonst kleinerer Diff; Gleichstand → glm-flash; Repro/tsc/Tests rot raus', () => {
   const tamper = `diff --git a/test/a.test.ts b/test/a.test.ts\n--- a/test/a.test.ts\n+++ b/test/a.test.ts\n-assert.ok(1)\n`;
   const w1 = waehle([{ bauer: FLASH, ok: true, diff: tamper, schnell: gruen }, { bauer: DEEPSEEK, ok: true, diff: diffN(9), schnell: gruen }]);

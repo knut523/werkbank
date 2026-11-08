@@ -44,9 +44,12 @@ const SKIP = /\.(skip|only|todo)\b|\b(xit|xdescribe|xtest)\s*\(|@pytest\.mark\.(
 export function tamperGruende(diff: string): string[] {
   const g: string[] = [];
   let datei = '', neu = false, imp = false;
-  for (const z of diff.split('\n')) {
+  let weg = new Set<string>(), dazu = new Set<string>();
+  // Entfernte Import-Quelle, die nirgends wieder hinzukommt, ändert die Bedeutung der Assertions (z. B. assert → './fake-assert.ts').
+  const quellen = () => { if (!neu && datei && TESTDATEI.test(datei)) for (const q of weg) if (!dazu.has(q)) g.push(`${datei}: Import-Quelle entfernt/umgelenkt („${q}“)`); weg = new Set(); dazu = new Set(); };
+  for (const z of [...diff.split('\n'), 'diff --git a/- b/-']) {
     const h = z.match(/^diff --git a\/(.+?) b\/(.+)$/);
-    if (h) { datei = h[2]; neu = false; imp = false; continue; }
+    if (h) { quellen(); datei = h[2]; neu = false; imp = false; continue; }
     if (z.startsWith('new file mode')) { neu = true; continue; }
     if (z.startsWith('deleted file mode') && TESTDATEI.test(datei)) { g.push(`${datei}: Testdatei gelöscht`); datei = ''; continue; }
     if (!TESTDATEI.test(datei) || z.startsWith('+++') || z.startsWith('---')) continue;
@@ -56,6 +59,10 @@ export function tamperGruende(diff: string): string[] {
     if (kopfZeile && !/\bfrom\b|^\s*import\s+['"]/.test(inhalt)) imp = true;
     const istImport = kopfZeile || imp || /^\s*\}\s*from\b/.test(inhalt);
     if (imp && /\bfrom\b/.test(inhalt)) imp = false;
+    if (istImport) {
+      const q = inhalt.match(/\bfrom\s*['"]([^'"]+)['"]|^\s*import\s*['"]([^'"]+)['"]/);
+      if (q) (z.startsWith('+') ? dazu : weg).add(q[1] ?? q[2]);
+    }
     if (istImport && !z.startsWith('+')) continue;
     if (z.startsWith('-') && !neu) g.push(`${datei}: Zeile entfernt/geändert („${z.slice(1, 60).trim()}“)`);
     else if (z.startsWith('+') && SKIP.test(z)) g.push(`${datei}: Skip-Marker („${z.slice(1, 60).trim()}“)`);
