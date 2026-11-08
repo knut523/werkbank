@@ -8,8 +8,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { repo } from './delegation-hilfe.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3487;
+const [PORT] = await freiePorts(1);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-wj-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-wj-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-wj-'));

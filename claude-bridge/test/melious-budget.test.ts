@@ -276,9 +276,12 @@ test('Buchung und Abrechnung unter derselben Kennung: der server-Pfad trifft die
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { realpathSync, mkdirSync } from 'node:fs';
+import { freiePorts } from './port-hilfe.ts';
+
+const [PORT] = await freiePorts(1);
 
 test('Echter Zug: Vorabbuchung und Werkbank-Abrechnung treffen sich — Ledger wird gefüllt', { timeout: 60_000 }, async () => {
-  const PORT = 3447, CONV = '00000000-0000-4000-8000-0000000000bb';
+  const CONV = '00000000-0000-4000-8000-0000000000bb';
   const STATE = mkdtempSync(join(tmpdir(), 'budget-e2e-state-'));
   const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'budget-e2e-orch-')));
   const DIR = join(ORCH, 'strang-1'); mkdirSync(DIR);

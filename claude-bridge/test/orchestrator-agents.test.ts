@@ -9,8 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { orchestratorBlock, orchDirProblem, classify } from '../src/tools.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3194, OFF_PORT = 3197;
+const [PORT, OFF_PORT] = await freiePorts(2);
 const MAIL = 'orch@maxenergy.at';
 const INTERNAL = 'test-intern-' + randomUUID();
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'orch-roots-')));
