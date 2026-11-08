@@ -10,10 +10,10 @@
 import { freigabeVerbrauchen } from './freigabe.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { drain, drainSek } from './schlange.ts';
+import { drain, drainSek, drainLaeuft } from './schlange.ts';
 import { liste } from './prozesse.ts';
 import { waechterZustand } from './waechter.ts';
-import { strangPruefen, handleTurn, stats, scratchFor, workDirFor, safeId, sitzungsKey, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, prozessSicht, type Sink, type Tiefe } from './sessions.ts';
+import { strangPruefen, handleTurn, hatLaufendenZug, stats, scratchFor, workDirFor, safeId, sitzungsKey, sessionsOf, registerOrchestration, strangFreigabe, strangFreigabeEntziehen, strangAbbrechen, orchStateOf, orchKindOf, endLeitstand, autoFor, injectMessage, injectState, STRAND_MODEL, TIEFEN, startDelegation, melSub, ensembleReview, ensembleFuerWeb, auslastungFuer, delegationStand, delegationUrteil, phaseWechseln, schalterKlassen, prozessSicht, type Sink, type Tiefe } from './sessions.ts';
 import { auslastung } from './auslastung.ts';
 import { budgetAbrechnen, budgetMelder } from './kapazitaet.ts';
 import { orchDirProblem } from './tools.ts';
@@ -249,6 +249,16 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   const stream = body.stream === true;
   const includeUsage = !!body.stream_options?.include_usage;
   const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
+  const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
+  const userId = header(req, 'x-librechat-user-id') ?? `t-${tokenHash}`;
+  const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
+  const convId = header(req, 'x-librechat-conversation-id') ?? `h-${createHash('sha256').update(firstUser).digest('hex').slice(0, 24)}`;
+
+  // Drain (SIGTERM): keine neuen Züge; Antworten auf offene Rückfragen und laufende Züge (hatLaufendenZug) gehen weiter durch.
+  if (drainLaeuft() && !hatLaufendenZug(userId, convId)) {
+    log('drain: neuer Zug abgelehnt', { user: userId });
+    return json(res, 503, { error: { message: 'Die Brücke startet gerade neu — bitte in einer Minute erneut senden.' } });
+  }
   const sink = makeSink(res, model, stream, includeUsage);
 
   if (model === TITLE_MODEL) { sink.write(titleFrom(messages)); sink.finish(); return; }
@@ -280,10 +290,6 @@ async function chat(req: IncomingMessage, res: ServerResponse) {
   const atts = lastUserIdx >= 0 ? extractAttachments(messages[lastUserIdx].content) : [];
   if (!prompt && !atts.length) { sink.write('Leere Nachricht.'); return sink.finish(); }
 
-  const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
-  const userId = header(req, 'x-librechat-user-id') ?? `t-${tokenHash}`;
-  const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
-  const convId = header(req, 'x-librechat-conversation-id') ?? `h-${createHash('sha256').update(firstUser).digest('hex').slice(0, 24)}`;
 
   // Anhänge in den Arbeitsordner dieses Chats legen und im Prompt nennen (relativer Pfad = relativ zu dessen cwd).
   if (atts.length) {
@@ -587,7 +593,9 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => log('listening', { host: HOST, port: PORT, mock: MOCK }));
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => {
-  log('shutdown', { sig }); server.close();
-  if (drainSek() <= 0) process.exit(0);
-  void drain(() => stats().drainLaufend).then((leer) => { log('drain', { leer }); process.exit(0); });
+  log('shutdown', { sig });
+  // Der Listener bleibt während des Drain offen: laufende Stränge rufen die Brücke per HTTP zurück (delegieren, Phase, melious_sub,
+  // Ensemble, Auslastung). Erst nach dem Drain schließen; neue Züge lehnt chat() solange mit 503 ab.
+  if (drainSek() <= 0) { server.close(); process.exit(0); }
+  void drain(() => stats().drainLaufend).then((leer) => { log('drain', { leer }); server.close(); process.exit(0); });
 });

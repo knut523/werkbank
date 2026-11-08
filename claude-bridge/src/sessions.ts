@@ -31,8 +31,10 @@ import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { testAccount } from './accounts.ts';
+/** Höchstwartezeit eines Zuges auf die Probe unbekannter Konten (BRIDGE_PROBE_WARTE_MS, Vorgabe 30 s). */
+const probeWarteMs = () => { const n = Number(process.env.BRIDGE_PROBE_WARTE_MS); return Number.isFinite(n) && n >= 0 ? n : 30_000; };
 const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK === 'true';
-import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
+import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, probeAusstehend, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
 import { bestofnStrang, bestofnAblehnung, ablehnungsZiel, pruefUrteil } from './bauerstrang.ts';
@@ -732,6 +734,8 @@ export const MEL_SUB_HINT_CLAUDE = `Verteilung Claude ↔ Melious: Melious ist g
 export { safeId };
 
 /** Kennung einer Unterhaltung: Buchung beim Zug-Start (hier) und Abrechnung gegen den Ist-Verbrauch (server.ts, onMeliousUsage) müssen dieselbe benutzen. */
+/** Hat diese Unterhaltung einen laufenden Zug (z. B. mit offener Rückfrage)? */
+export const hatLaufendenZug = (userId: string, convId: string): boolean => lives.has(sitzungsKey(userId, convId));
 export const sitzungsKey = (userId: string, convId: string): string => `${safeId(userId)}:${safeId(convId)}`;
 
 // ---------- Ausgabe ----------
@@ -1044,10 +1048,11 @@ function handleMessage(live: Live, msg: any) {
           if (block.name === INBOX_TOOL && !msg.parent_tool_use_id) live.inboxCalls.add(block.id);
           if (cls === 'read') emitStatus(live, subPrefix(live, msg.parent_tool_use_id) + statusLine(block.name, block.input ?? {}));
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
-        } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
-          live.progressed = true;
+        } else if (block.type === 'text' && !msg.parent_tool_use_id && !msg.error) {
+          // Die Schlussantwort gehört in den Statusblock der Übergabe, auch wenn sie schon gestreamt wurde (sawStreamText);
+          // nur das Ausgeben bleibt davon abhängig.
           { const u = uebergabeStand.get(live.key); if (u) { u.letzte = String(block.text ?? '').slice(-4000); saveUebergabe(); } }
-          emitModelText(live, block.text);
+          if (!live.sawStreamText) { live.progressed = true; emitModelText(live, block.text); }
         }
       }
       return;
@@ -1597,6 +1602,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let fruehKonten: Promise<any[] | null> | null = null;
   let melBuchbar = false;   // Melious für die Person nutzbar: nur dann gibt es etwas vorab zu buchen (ohne Konto verbraucht der Zug keine Melious-Energie)
   if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); melBuchbar = !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now()); setzeMelious(req.userId, melBuchbar); } }); }
+  // Die Prüfung oben lag vor den Awaits (Kapazität, Kontenliste): eine zweite Nachricht derselben Unterhaltung hat in der Zwischenzeit
+  // einen Zug angemeldet. Hier erneut prüfen (wie in der Schlange unten) und die Zählung der eigenen Züge neu lesen.
+  if (lives.has(key)) {
+    req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
+    req.sink.finish();
+    return;
+  }
+  mine = meine();
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
@@ -1903,16 +1916,28 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (claudeBudgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
   setzeMelious(req.userId, !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));   // roher Wert: setzeMelious bildet safeId selbst
   // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
-  if (claudeBudgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
+  const claudeIds = accounts.filter((a) => !isMelious(a)).map((a) => a.id);
+  const probe = claudeBudgetAn() && !MOCK_PROBE ? probeUnbekannte(claudeIds, async (id) => {
     const a = accounts.find((x) => x.id === id);
     return !!a && (await testAccount(req.query as any, { token: a.token, cwd: scratch, home, probe: true })).ok;
-  }).catch(() => {});
+  }).catch(() => {}) : null;
   let queue = live.worker ? workerQueue() : leadQueue();
+  // Alle Claude-Konten „unbekannt“ (cswap ohne Usage, z. B. frisch eingetragene Tokens): die Schlange ist leer, bis die Probe lief.
+  // Auf die laufende bzw. fällige Probe warten (höchstens 30 s) und neu rechnen — sonst scheitert der erste Zug, auch Leads und der Hauptchat.
+  if (!queue.length && probe && probeAusstehend(claudeIds)) {
+    emitStatus(live, '⏳ Neues Claude-Konto wird geprüft …');
+    let wecker: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([probe, new Promise((r) => { wecker = setTimeout(r, probeWarteMs()); })]);
+    clearTimeout(wecker);
+    queue = live.worker ? workerQueue() : leadQueue();
+  }
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   if (!queue.length) {
-    // Nur Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten.
-    emitStatus(live, '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.');
+    // Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten. Leads, Chats und der Hauptchat: kein Worker-Text.
+    emitStatus(live, live.worker
+      ? '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.'
+      : '⚠️ Kein Claude-Konto ist gerade nutzbar: neue Konten ohne Nutzungsdaten werden erst nach einem erfolgreichen Probe-Aufruf freigegeben, und der ist (noch) nicht gelungen. Bitte in einer Minute erneut senden.');
     live.outcome = 'rate_limit';
     setTurn(key, { start: live.t0, end: Date.now(), outcome: 'rate_limit' });
     end(live);

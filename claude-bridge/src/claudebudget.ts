@@ -129,7 +129,7 @@ const resets = new Map<string, number>();
 export const resetNotieren = (id: string, until: number) => { resets.set(id, until); speichern(); };
 export const _resetVon = (id: string) => resets.get(id) ?? null;
 /** Nur für Tests. */
-export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); meliousFrei.clear(); datei = null; };
+export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); meliousFrei.clear(); probeLetzt.clear(); probeLaeuft.clear(); datei = null; };
 
 // ---------- 5. alle Konten heiß ----------
 export type Verteilung =
@@ -279,10 +279,24 @@ export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: s
 
 /** Unbekannte Konten (ohne Usage) probieren: beim ersten Sehen sofort, danach höchstens alle 30 min; Ergebnis über kontoFrei. */
 const probeLetzt = new Map<string, number>();
+const probeLaeuft = new Map<string, Promise<unknown>>();   // laufende Probe je Konto: ein zweiter Zug wartet auf sie, statt eine leere Schlange zu sehen
+/** Gibt ein Promise zurück, das endet, wenn alle für diese Konten laufenden oder jetzt gestarteten Proben fertig sind. */
 export function probeUnbekannte(ids: string[], fn: (id: string) => Promise<boolean>, now = Date.now()): Promise<unknown> {
   if (!budgetAn()) return Promise.resolve();
-  return Promise.all(ids.filter((id) => lagen.get(id)?.status === 'unbekannt' && !kontoFrei(id) && now - (probeLetzt.get(id) ?? -Infinity) >= 30 * 60_000)
-    .map((id) => { probeLetzt.set(id, now); return probeKonto(id, () => fn(id), now); }));
+  return Promise.all(ids.filter((id) => lagen.get(id)?.status === 'unbekannt' && !kontoFrei(id))
+    .flatMap((id) => {
+      const laeuft = probeLaeuft.get(id);
+      if (laeuft) return [laeuft];
+      if (now - (probeLetzt.get(id) ?? -Infinity) < 30 * 60_000) return [];
+      probeLetzt.set(id, now);
+      const p = probeKonto(id, () => fn(id), now).finally(() => { probeLaeuft.delete(id); });
+      probeLaeuft.set(id, p);
+      return [p];
+    }));
+}
+/** Ist für diese Konten eine Probe unterwegs oder fällig (unbekannt, noch nicht frei, letzte Probe > 30 min her)? */
+export function probeAusstehend(ids: string[], now = Date.now()): boolean {
+  return budgetAn() && ids.some((id) => lagen.get(id)?.status === 'unbekannt' && !kontoFrei(id) && (probeLaeuft.has(id) || now - (probeLetzt.get(id) ?? -Infinity) >= 30 * 60_000));
 }
 
 // ---------- 6. Zustand atomar neben schlange.json (Muster schlange.ts) ----------
