@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { bestofnStrang, bestofnAblehnung } from '../src/bauerstrang.ts';
+import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from '../src/bauerstrang.ts';
 import { bauerEreignisse, statistikLaden, SONNET } from '../src/bauerrennen.ts';
 import { FLASH, DEEPSEEK, GLM } from '../src/modellwahl.ts';
 
@@ -141,4 +141,26 @@ test('P8: Bauer ignoriert den Abbruch über die Gnadenfrist hinaus → Worktree 
     assert.ok(dirs.every((x) => !existsSync(x)), 'nach dem Ende entfernt');
     assert.equal(schriebDanach, false);
   } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});
+
+test('L3b: alle Bauer bleiben rot → ok:false mit Sonnet-Klassen-Grund (Übergabe an Sonnet auf Claude), nichts angewendet', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const rot = async () => ({ ok: false, log: 'tsc rot' });
+  const r = await bestofnStrang({ cwd, id: 'x8', prompt: 'ändere src/a.ts', env: {}, zug: zug({}), pruefe: rot });
+  assert.equal(r?.ok, false); assert.equal(r!.text, '');
+  assert.match(r!.grund, /Sonnet-Klasse/); assert.match(r!.grund, /Sonnet baut/);
+  assert.ok(gebaut.length >= 2, 'beide Bauer liefen');
+  assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), 'export const a = 0;\n', 'nichts angewendet');
+  rmSync(wurzel, { recursive: true, force: true });
+});
+
+test('L3b: ablehnungsZiel — Eskalation (modell sonnet) geht an die Sonnet-Klassen-Übergabe, nie als OC2-Modell weiter', async () => {
+  const { wurzel, cwd } = repo(); gebaut.length = 0;
+  const kl = await bestofnStrang({ cwd, id: 'x9', prompt: 'ändere src/kapazitaet.ts', env: {}, zug: zug({}), pruefe });
+  const z = ablehnungsZiel({ art: 'eskalation', modell: SONNET, fehlerlogs: ['a'] });
+  assert.deepEqual(z, kl, 'identisch zur Sonnet-Klasse (ok:false, text, grund)');
+  assert.equal(z?.ok, false);
+  assert.equal(ablehnungsZiel({ art: 'verlierer', bauer: FLASH }), null);
+  assert.equal(ablehnungsZiel(null), null);
+  rmSync(wurzel, { recursive: true, force: true });
 });

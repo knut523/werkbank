@@ -44,6 +44,10 @@ async function betroffeneTests(dir: string, diff: string): Promise<{ ok: boolean
   return { ok: true, log: '' };
 }
 
+/** Grund der Sonnet-Klasse — dieselbe Übergabe an Sonnet auf Claude (bauZug → ok:false → Claude-Rückfall) für Klasse, rote Rennen und Eskalation. */
+export const SONNET_GRUND = 'Sonnet-Klasse (Geld/Konten) oder Melious leer — Sonnet baut, kein Best-of-N';
+const sonnetUebergabe = () => ({ ok: false as const, text: '', grund: SONNET_GRUND });
+
 export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   const env = o.env ?? process.env;
   if (!bestofnAn(env)) return null;
@@ -53,7 +57,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   if (inSchutzzone(dateien, env)) return { ok: false, text: '', grund: 'Schutzzone (Migration/Auth/Billing/Workflow/.env) — Opus baut, kein Best-of-N' };
   // Sonnet-Klasse (wb21/i-f-sonnet-glm): Geld/Konten oder Melious leer → Sonnet baut, kein Best-of-N. Abschalten: BRIDGE_SONNETKLASSE=aus.
   const meliousLeer = o.userId ? budgetGrund(o.userId, 'bauer', Date.now(), env) !== '' : false;
-  if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return { ok: false, text: '', grund: 'Sonnet-Klasse (Geld/Konten) oder Melious leer — Sonnet baut, kein Best-of-N' };
+  if (bauerFuer(dateien, env, undefined, meliousLeer)[0] === 'sonnet') return sonnetUebergabe();
   let zone = false;
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
   const laufend: { bauer: string; p: Promise<unknown>; offen: () => boolean }[] = [];
@@ -109,6 +113,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     o.status?.(`⚠️ Best-of-N: Abbruch unbestätigt — ${b} läuft noch, Worktree ${s.dir} bleibt bis zu seinem Ende`);
     void l.p.catch(() => {}).then(() => removeWorktree(s.dir).catch(() => {}));
   }
+  if (lauf.weiter === 'sonnet' && !zone) return sonnetUebergabe();   // L3b: alle Bauer rot (auch der Retry) → Sonnet auf Claude, nie 'sonnet' auf OC2
   if (zone) return { ok: false, text: '', grund: 'Schutzzone (Diff berührt Migration/Auth/Billing/Workflow/.env) — Opus baut, Sieger nicht angewendet' };
   if (lauf.zerlegen) return { ok: false, text: '', grund: 'Punkt zu groß (Deckel überschritten) — im Plan kleiner schneiden' };
   if (!ok) return { ok: false, text: '', grund: sieger ? 'Best-of-N: Sieger-Diff ließ sich nicht anwenden' : 'Best-of-N: kein Bauer lieferte einen sauberen Diff' };
@@ -127,3 +132,6 @@ export async function bestofnAblehnung(id: string, grund: string, jetzt = Date.n
   }
   return f.art === 'sonnet' ? { art: 'eskalation', modell: SONNET, fehlerlogs: f.fehlerlogs } : null;
 }
+
+/** Rein: wohin nach einer Review-Ablehnung? Eskalation (Sonnet) → Sonnet-Klassen-Übergabe (ok:false → Zug läuft mit Claude), sonst null (OC2 baut weiter). */
+export const ablehnungsZiel = (f: Awaited<ReturnType<typeof bestofnAblehnung>>): StrangAusgang => (f?.art === 'eskalation' ? sonnetUebergabe() : null);
