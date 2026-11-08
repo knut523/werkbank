@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, pruefSemaphor, shellPruefung, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
 import { budgetGrund } from './kapazitaet.ts';
 import { subWorktree, removeWorktree, run } from './delegation.ts';
 import { GLM } from './modellwahl.ts';
@@ -39,7 +39,7 @@ async function betroffeneTests(dir: string, diff: string): Promise<{ ok: boolean
   for (const f of dateien) { let o = dirname(f); while (o !== '.' && !existsSync(join(dir, o, 'package.json'))) o = dirname(o); (nach.get(o) ?? nach.set(o, []).get(o)!).push(f); }
   for (const [o, fs] of nach) {
     const rel = fs.map((f) => (o === '.' ? f : f.slice(o.length + 1)));
-    const r = await shellPruefung(join(dir, o), `node --test ${rel.map((f) => JSON.stringify(f)).join(' ')}`);
+    const r = await pruefLauf(join(dir, o), 'node', ['--test', ...rel]);
     if (!r.ok) return r;
   }
   return { ok: true, log: '' };
