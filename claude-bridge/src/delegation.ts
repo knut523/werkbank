@@ -16,6 +16,14 @@ export const PHASE_MODELL: Record<Phase, 'opus' | 'sonnet'> = {
 };
 export const PHASEN = Object.keys(PHASE_MODELL) as Phase[];
 
+/** Wave 21 B1: Strang (Lead/Worker, nie der Hauptchat) ohne gesetztes Modell und ohne Phase → sonnet statt des geerbten Standards (opus[1m]).
+ *  BRIDGE_STRANG_MODELL=aus schaltet ab; opus/sonnet/haiku wählbar, alles andere → sonnet. */
+export function strangStandardModell(env: Record<string, string | undefined> = process.env): string | undefined {
+  const v = String(env.BRIDGE_STRANG_MODELL ?? 'sonnet').trim().toLowerCase();
+  if (!v || v === 'aus') return undefined;
+  return /^(opus|sonnet|haiku)$/.test(v) ? v : 'sonnet';
+}
+
 // C8: Kappung als Zahlen (eine Stelle, im Plan als Tabelle).
 export const KAPPUNG = {
   auftrag: 20_000,          // Zeichen je Auftrag an einen Worker

@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
+import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, strangStandardModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
@@ -1910,7 +1910,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       options.systemPrompt = [LESER_SYSTEM, live.worker ? workerAppend(orchMap[key]?.rolle ?? 'leser') : live.orch ? ORCH_APPEND : ''].filter(Boolean).join('\n\n');
     }
     // Modell des Strangs vor dem der Anfrage: beim Start festgelegt, nicht durch die Auswahl im Chat überstimmt (Review 2, 3).
-    const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model;
+    const model = mm ?? (mel ? undefined : a.chainModel ?? strandClaude) ?? req.model ?? (!mel && live.orch && !live.leit ? strangStandardModell() : undefined);
     if (model) options.model = model; else delete options.model;
     live.onClaude = live.worker && !mel;
     live.melious = mel ? { rest: a.rest ?? 0, calls: new Map(), result: null, cut: false, model: options.model, faktoren: a.faktoren && Object.keys(a.faktoren).length ? a.faktoren : undefined, taktS: a.taktS } : undefined;
