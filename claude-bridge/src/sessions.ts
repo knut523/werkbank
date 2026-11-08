@@ -1671,6 +1671,13 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
       return;
     }
   }
+  // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
+  // Zulassung und Buchung sind getrennte Schritte (Warteschlange, gleichzeitiger Zug derselben Person, Lage ohne Antwort): scheitert
+  // die Buchung, ist das eine Ablehnung wie bei der Zulassung — der Zug startet nicht (Ursache: beides war nicht eine Entscheidung).
+  if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) {
+    const b = budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
+    if (!b.ok) { lockGrund = b.grund || 'Energie-Budget reicht gerade nicht'; lock = 'chat-busy'; }
+  }
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', ...(lockGrund ? { grund: lockGrund.slice(0, 200) } : {}) });
     req.sink.write(lock === 'board-full'
@@ -1690,9 +1697,6 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     oldest.abort.abort();
     end(oldest);
   }
-
-  // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
-  if (kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
 
   // 3) Neuer Zug.
   const live: Live = {
