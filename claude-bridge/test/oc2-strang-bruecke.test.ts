@@ -9,8 +9,9 @@ import { mkdtempSync, realpathSync, writeFileSync, chmodSync, mkdirSync, readFil
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3497, OC2_PORT = 47871;
+const [PORT, OC2_PORT] = await freiePorts(2);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-oc2s-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-oc2s-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-oc2s-'));

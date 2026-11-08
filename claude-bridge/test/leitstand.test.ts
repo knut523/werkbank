@@ -12,8 +12,9 @@ import { classify, orchestratorBlock, leitstandCheck, parseAnswer, VAULT_DIR } f
 import { wakeBatch, idleToReap } from '../src/sessions.ts';
 import { leitstandMcp } from '../src/claudehome.ts';
 import { AGENTS, READONLY_ROLES } from '../src/agents.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3294;
+const [PORT] = await freiePorts(1);
 const MAIL = 'leit@maxenergy.at', OTHER = 'team@maxenergy.at';
 const INTERNAL = 'test-intern-' + randomUUID();
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'leit-roots-')));
