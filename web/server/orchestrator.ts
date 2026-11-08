@@ -465,6 +465,8 @@ export interface StartInput { title: string; prompt: string; cwd: string; plan?:
   budget?: number | null;
   /** Vorrang in der Warteschlange der Brücke (Plan 213 S1a: Reviews). */
   vorrang?: boolean;
+  /** Paket D: Rang im Melious-Budget der Brücke (dringend | bauer | pruefung | lesen | zweitmeinung | kosmetik); leer = aus dem Profil. */
+  jobtyp?: string;
   /** R32 (Nachtrag 4): Knut übersteuert das Routing für diesen Strang (claude | melious); sonst entscheidet die Klasse. */
   routing?: 'claude' | 'melious' | null;
   /** Konzept J, J1: Läufer des Strangs (claude | jcode | auto/leer = automatisch, siehe jstrang.ts). */
@@ -617,7 +619,7 @@ export async function startOrch(u: User, inp: StartInput): Promise<{ id: string;
     if (!l.frei && !(ms?.enabled && (ms.fallback || ms.kette))) throw err(409, `${l.text!}${fresh.worktree ? ` (Der frische Worktree ${real} bleibt liegen und wird beim nächsten Start wiederverwendet oder aufgeräumt.)` : ''}`);
   }
   // 1) Bei der Brücke anmelden (prüft den Ordner selbst). Ohne Anmeldung kein Chat (fail closed).
-  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}), ...(lw.laeufer !== 'claude' ? { laeufer: lw.laeufer } : {}) }), signal: AbortSignal.timeout(5000) });
+  const reg = await fetch(`${cfg.bridgeUrl}/internal/orchestrate`, { method: 'POST', headers: internalHeaders(), body: JSON.stringify({ userId: u.id, email: u.email, conv, dir: real, ...(modell ? { modell } : {}), ...(risiko ? { risiko } : {}), ...(profil ? { profil } : {}), tiefe, ...(inp.vorrang === true ? { vorrang: true } : {}), ...(inp.jobtyp ? { jobtyp: inp.jobtyp } : {}), ...(lw.laeufer !== 'claude' ? { laeufer: lw.laeufer } : {}) }), signal: AbortSignal.timeout(5000) });
   const rj: any = await reg.json().catch(() => ({}));
   if (!reg.ok) throw err(reg.status === 400 || reg.status === 409 || reg.status === 403 ? reg.status : 502, rj.error ?? `Brücke antwortet mit ${reg.status}`);
   const stand = [fresh.status, g0 ? g0.text : null].filter(Boolean).join('\n') || null;

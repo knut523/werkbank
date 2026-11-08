@@ -35,7 +35,8 @@ import { modellReihe, ensembleLauf, FLASH, GLM52, type Art } from './modellwahl.
 import { schaetze, passt, passtJcode, schaetzungText, speicherStand, jcodeTopfGb, type Schaetzung, type SpeicherStand } from './schaetzung.ts';
 import { auslastung, auslastungZeile } from './auslastung.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
-import { kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, type Kapazitaet } from './kapazitaet.ts';
+import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
+import { auslastung as claudeAuslastung } from './auslastung.ts';
 
 export interface Sink {
   write(text: string): void;
@@ -223,6 +224,7 @@ let cwdMap: Record<string, string> = {};
 try { cwdMap = JSON.parse(readFileSync(cwdFile, 'utf8')); } catch { /* keine */ }
 // Audit 05.11. (3): die Warteschlange auf Platte — nach einem Neustart bekommt ein Zug, der wiederkommt, seinen Platz zurück.
 merkeIn(join(cfg.stateDir, 'schlange.json'));
+budgetPersistenz(join(cfg.stateDir, 'melious-budget.json'));   // Paket D: Eimer, Ledger, Breaker, Faktor, Anker überleben den Neustart
 
 // Orchestrator-Stränge (Knut, 09.10.2026): Unterhaltung → Arbeitsordner, Anmeldezeit und Ausgang des letzten Zuges.
 // Angemeldet über den internen Kanal VOR dem ersten Zug (die Web-App wählt die Unterhaltungs-ID); dauerhaft.
@@ -254,7 +256,7 @@ export const LESER_SYSTEM = 'Du bist ein Lese-Agent im OLAF Workspace. Antworte 
 // laeufer: 'jcode' = Strang läuft über jcode (Konzept J1; eigener Speicher-Topf). turn.grund: warum ein Zug mit „busy“ endete
 // (Grund der Parallelgrenze; Stränge warten seit dem Schlangen-Fix 06.11. ohne Zeitdeckel und enden dort nie mit „busy“).
 export interface Sperren { waechter: number; klassifikator: number; grund: string }
-interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
+interface OrchEntry { dir: string; since: number; kind?: OrchKind; vorrang?: boolean; batches?: string[]; lastHand?: number; modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; meliousModell?: string; jobtyp?: Jobtyp; laeufer?: 'jcode' | 'oc2'; oc2?: { sitzung: string; server: string }; laeuferFallback?: { at: number; grund: string }; freigaben?: { pfad: string; bis: number }[]; turn?: { start: number; end: number | null; outcome: TurnOutcome | null; batch?: string | null; modell?: string; grund?: string; sperren?: Sperren };
   // Plan 165 — Strang: Auftrag (erste Nachricht, für neue Phasen), aktuelle Phase, angemeldeter Wechsel (gilt im selben Zug),
   // Modelle der Züge seit dem letzten Wechsel (C6 für Ersatz-Leads). Worker: Eltern-Strang, Rolle, Claude-Modell beim Rückfall.
   auftrag?: string; phase?: Phase; phaseC2?: boolean; phaseNeu?: { phase: Phase; text: string; c2: boolean; at: number }; phaseModelle?: string[]; pruefFest?: { ref: string; sha: string };
@@ -486,7 +488,8 @@ export function reapIdle(now = Date.now()): number {
   }
   return victims.length;
 }
-setInterval(() => { try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
+budgetMelder((user, text) => log('melious-budget', { user, text }));   // Airbag/Abgleich: Ereignis im Log (Meldung an Knut über die Schlange: „wartet: Energie …“)
+setInterval(() => { try { budgetTick(); if (budgetAn()) claudeAuslastung().then((a) => leseAktualisieren(a.fuenfH)).catch(() => {}); } catch { /* egal */ } try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
 
 const STARTED_AT = Date.now();
 /** R31 (werkbank_stand): Wertklassen der Schalter dieses Prozesses — aufgezählte Werte bleiben, alles andere heißt „gesetzt“. */
@@ -544,12 +547,12 @@ export function workDirFor(userId: string, convId: string): string {
  * Meldet eine neue Unterhaltung als Orchestrator-Strang an: Arbeitsordner = dir (vorher geprüft, siehe server.ts),
  * strengere Sperren. Nur für Unterhaltungen ohne Sitzung und ohne Ordner — eine bestehende wird nie umgebogen.
  */
-export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean; laeufer?: 'jcode' | 'oc2' } = {}): void {
+export function registerOrchestration(userId: string, convId: string, dir: string, kind: 'strand' | 'leitstand' = 'strand', o: { modell?: string; risiko?: Risiko; profil?: Profil; tiefe?: Tiefe; vorrang?: boolean; jobtyp?: string; laeufer?: 'jcode' | 'oc2' } = {}): void {
   const key = `${safeId(userId)}:${safeId(convId)}`;
   if (sessionMap[key] || cwdMap[key] || orchMap[key] || lives.has(key)) throw Object.assign(new Error('Unterhaltung gibt es schon.'), { status: 409 });
   if (o.profil === 'release') { const p = kind === 'strand' ? releaseWorktreeProblem(dir) : 'Profil release nur für Stränge.'; if (p) throw Object.assign(new Error(p), { status: 400 }); }
   cwdMap[key] = dir;
-  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}), ...((o.laeufer === 'jcode' || o.laeufer === 'oc2') && kind === 'strand' ? { laeufer: o.laeufer } : {}) };
+  orchMap[key] = { dir, since: Date.now(), ...(kind === 'leitstand' ? { kind } : {}), ...(o.modell && STRAND_MODEL.test(o.modell) ? { modell: o.modell } : {}), ...(o.risiko && ['niedrig', 'mittel', 'hoch'].includes(o.risiko) ? { risiko: o.risiko } : {}), ...(o.profil && o.profil !== 'voll' && PROFILE.includes(o.profil) ? { profil: o.profil } : {}), ...(o.tiefe && o.tiefe !== 'regular' && TIEFEN.includes(o.tiefe) ? { tiefe: o.tiefe } : {}), ...(o.vorrang ? { vorrang: true } : {}), ...(istJobtyp(o.jobtyp) && kind === 'strand' ? { jobtyp: o.jobtyp } : {}), ...((o.laeufer === 'jcode' || o.laeufer === 'oc2') && kind === 'strand' ? { laeufer: o.laeufer } : {}) };
   saveMap();
 }
 
@@ -602,7 +605,7 @@ export function orchStateOf(userId: string) {
     const l = lives.get(k);
     const seen = lastSeen.get(k);
     return {
-      conv: k.slice(prefix.length), dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
+      conv: k.slice(prefix.length), jobtyp: e.jobtyp ?? null, dir: e.dir, since: e.since, kind: e.kind ?? 'strand', modell: e.modell ?? null, risiko: e.risiko ?? null, profil: e.profil ?? 'voll', tiefe: e.tiefe ?? 'regular', phase: e.phase ?? null, running: !!l, waitingAnswer: !!l?.pending, turn: e.turn ?? null, queued: inSchlange(k), batches: e.batches ?? [], lastHand: e.lastHand ?? null,
       // Start ohne Ende und keine laufende Sitzung: die Brücke wurde mitten im Zug neu gestartet.
       interrupted: !l && !inSchlange(k) && !!e.turn && e.turn.end === null,
       resumable: !!sessionMap[k], turns: seen?.turns ?? null, written: seen?.written ?? [],
@@ -1503,7 +1506,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // Pass B (07.11.): „neu“ = noch kein Zug (sessionMap leert sich bei jcode und Phasenwechsel); Kontingent nur für Stränge auf Claude.
   const kapProfil = orchMap[key]?.profil ?? 'voll';
   const kapOpt = { neu: !orchMap[key]?.turn, bauend: ['voll', 'bauer', 'release'].includes(kapProfil),
-    claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber' };
+    claude: !String(orchMap[key]?.modell ?? '').startsWith('melious:') && orchMap[key]?.laeufer !== 'jcode' && kapProfil !== 'leser' && kapProfil !== 'schreiber',
+    // Paket D: Melious-Budget (Eimer, Rang, Nachtmodus) für Stränge, die Melious-Energie brauchen.
+    ...(['voll', 'bauer', 'release'].includes(kapProfil) || String(orchMap[key]?.modell ?? '').startsWith('melious:') ? { userId: req.userId, jobtyp: orchMap[key]?.jobtyp ?? jobtypVon({ profil: kapProfil, vorrang: !!orchMap[key]?.vorrang }) } : {}) };
   if (kind === 'strand' && kapLaden) await kapazitaetLaden(req.userId, () => kapLaden());
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
@@ -1526,7 +1531,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     const grund0 = lockGrund, warteAb = Date.now();   // Runde 7 B (Plan §22): Grund und Dauer der Wartezeit fürs Log
     // K3: lockGrund gilt für den letzten Aufruf (auch eines anderen Wartenden, z. B. jcode-Topf) — je Wartendem den eigenen merken
     let meinGrund = grund0;
-    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
+    const r = await warte({ key, userId: req.userId, vorrang: !!orchMap[key]?.vorrang, ...(kapOpt.jobtyp ? { rang: RANG[kapOpt.jobtyp] } : {}), ...(schaetzung.topf ? { topf: schaetzung.topf } : {}) }, {
       frei: () => { if (lives.has(key)) return false; const r = zulassen(lockFor(meine(), { readonly: !!req.readonly, mode }, box())); meinGrund = lockGrund; return r === 'ok'; },
       grund: () => meinGrund || 'gerade kein Platz',
       gehalten: () => !!kapGrund(),
@@ -1581,6 +1586,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     oldest.abort.abort();
     end(oldest);
   }
+
+  // Paket D: Vorabbuchung (3× Median je Jobtyp) vor dem Start; abgerechnet wird gegen den Ist-Verbrauch (server.ts, onMeliousUsage).
+  if (kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId) budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
 
   // 3) Neuer Zug.
   const live: Live = {
@@ -2009,7 +2017,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
           continue;
         }
         if (!live.rateLimited || live.abort.signal.aborted) break;
-        markExhausted(user, acct, live.rateLimited.resetsAt);
+        // Paket D: 402/Energie bei Melious → Breaker mit Backoff, der Schlüssel wird NICHT geparkt (06.11.: geparkter Schlüssel ließ die Stränge stehen).
+        if (isMelious(acct) && budgetAn() && live.melious?.fehler === 'energie') budgetFehler(user);
+        else markExhausted(user, acct, live.rateLimited.resetsAt);
         if (!queue[i + 1] && kontenFehlen && !live.worker) {
           // Liste fehlte: nicht „ausgeschöpft“ melden, sondern nachladen und mit der vollen Kette weitermachen (ohne schon Versuchtes).
           const list = await ladeKonten();
@@ -2410,6 +2420,7 @@ Ladezeit, Texte, Fehler und die Pfade der Bildschirmfotos — nenne sie im Ergeb
 
 async function runWorkerJcode(d: Deleg, prompt: string): Promise<string | null> {
   if (!jcodeAn() || d.rolle === 'pruefer') return null;
+  if (d.rolle === 'leser' && leseAufClaude()) return null;   // Paket D: Claude-5h kühl (< 40 %) → Lese-Jobs auf Claude
   const e = orchMap[d.workerKey];
   if (e?.wantMel === false) return null;
   let mel: Account | undefined;
@@ -2960,9 +2971,11 @@ async function runWorker(d: Deleg, prompt: string): Promise<string> {
   return chunks.join('');
 }
 
-function registerWorker(d: Deleg, o: { profil: Profil; modell: string; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean }) {
+/** Paket D: Prüfer = Zweitmeinung/Gegenprüfung (Rang 4) — gilt für alle Prüfer-Delegationen (pickPruefer-Pfad). */
+export const jobtypFuerRolle = (r: Rolle): Jobtyp | undefined => (r === 'pruefer' ? 'zweitmeinung' : undefined);
+function registerWorker(d: Deleg, o: { jobtyp?: Jobtyp; profil: Profil; modell: string; workerClaude?: 'haiku' | 'sonnet'; wantMel?: boolean; noClaude?: boolean }) {
   cwdMap[d.workerKey] = d.cwd;
-  orchMap[d.workerKey] = { dir: d.cwd, since: Date.now(), kind: 'worker', modell: o.modell, risiko: d.risiko, profil: o.profil, parent: d.parent, rolle: d.rolle, delegation: d.id,
+  orchMap[d.workerKey] = { dir: d.cwd, since: Date.now(), kind: 'worker', modell: o.modell, risiko: d.risiko, profil: o.profil, parent: d.parent, rolle: d.rolle, delegation: d.id, ...((jobtypFuerRolle(d.rolle) ?? o.jobtyp) ? { jobtyp: (jobtypFuerRolle(d.rolle) ?? o.jobtyp)! } : {}),
     ...(o.noClaude ? { noClaude: true } : { workerClaude: o.workerClaude }), ...(o.wantMel === false ? { wantMel: false } : {}) };
   saveMap();
 }

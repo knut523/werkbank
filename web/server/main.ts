@@ -3878,7 +3878,7 @@ on('POST', /^\/internal\/orchestrator\/(start|list|show|send|review|nachtbau|the
       return send(res, 200, { ok, id });
     }
     case 'start': {
-      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, routing: b.routing === 'claude' || b.routing === 'melious' ? b.routing : null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null, laeufer: typeof b.laeufer === 'string' ? b.laeufer : null });
+      const r = await startOrch(u, { title: b.title, prompt: b.prompt, cwd: b.cwd, plan: b.plan || null, shared: b.shared === true, code: b.code === true, slug: b.slug || null, lauf: b.lauf || null, modell: b.modell || null, routing: b.routing === 'claude' || b.routing === 'melious' ? b.routing : null, risiko: b.risiko || null, profil: b.profil || null, tiefe: b.tiefe || null, budget: b.budget || null, laeufer: typeof b.laeufer === 'string' ? b.laeufer : null, jobtyp: typeof b.jobtyp === 'string' ? b.jobtyp : undefined });
       log('strang gestartet', { user: u.id, id: r.id, conv: r.conv, g0: r.g0?.ergebnis ?? null, tiefe: r.tiefe });
       return send(res, 200, { ...r, schaetzung: await schaetzungFuer(u, { tiefe: r.tiefe, profil: b.profil || null, budget: Number(b.budget) || null }) });
     }
@@ -4260,7 +4260,7 @@ on('POST', /^\/internal\/melious-usage$/, async (req, res) => {
   const u = await internalUser(req, b);
   const r = await meliousBooking(u, b.usage, b.model);
   log('melious verbrauch', { user: u.id, energie: Math.round(r.energie * 100) / 100, heuteEnergie: r.usage.heute.energie, tempo: r.usage.energie.tempo });
-  send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre });
+  send(res, 200, { ok: true, rest: r.usage.rest, sperre: r.usage.sperre, energie: r.energie });
 });
 
 // Knut 07.11. („I want more than 8“): Kapazitäts-Lage für die Zulassung neuer Strang-Züge in der Brücke (kapazitaet.ts) —
@@ -4276,7 +4276,21 @@ on('POST', /^\/internal\/kapazitaet$/, async (req, res) => {
   send(res, 200, {
     meliousProzent: typeof fuell === 'number' ? Math.round(fuell * 100) : null, unterBoden: !!use && !!bodenGrund(fuell, !!use.energie?.geschaetzt),
     claudeFrei: konten.length ? luft.frei : null, claudeFreiAb: luft.bis, prWartend: ib ? ib.eintraege.filter((e: any) => e.art === 'push').length : null,
+    stand: typeof use?.energie?.stand === 'number' ? use.energie.stand : null, topfMax: typeof use?.energie?.topfMax === 'number' ? use.energie.topfMax : null, echt: !!use && !use.energie?.geschaetzt,   // Paket D: Anker für das Budget
   });
+});
+
+// Paket D: Airbag des Melious-Budgets (Brücke, kapazitaet.ts) → Bedarfskanal („Braucht Hauptsitzung“ in der 2.0 + Hauptchat/Inbox).
+// Die Brücke ruft das genau einmal je Auslösung; Pseudo-Strang „melious-budget“, Zeitstempel im Text, damit jede Auslösung eine eigene Zeile ist.
+on('POST', /^\/internal\/melious-airbag$/, async (req, res) => {
+  const b = await body(req);
+  const u = await internalUser(req, b);
+  const text = `Melious-Airbag ${new Date().toLocaleTimeString('de-AT', { timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit' })}: geschätzter Energiestand unter 2× Boden — Melious-Jobs pausieren. Stand im Dashboard prüfen; Erledigt, sobald der Topf wieder gefüllt ist.`;
+  const r = await bedarfMelden(u, { _id: 'melious-budget', title: 'Melious-Budget' }, { art: 'sonstiges', text, pfad: null });
+  const hauptchat = r.neu ? await meldeBedarf(u, { _id: 'melious-budget', title: 'Melious-Budget' }, `meldet Bedarf (Sonstiges) · Kennung ${r.id} · Melious-Airbag · beantworten: 2.0 „Für die Hauptsitzung“`, text).catch(() => false) : false;
+  zahlCache.delete(u.id);
+  log('melious-airbag gemeldet', { user: u.id, id: r.id, neu: r.neu });
+  send(res, 200, { id: r.id, neu: r.neu, hauptchat });
 });
 
 // Gegenprüfung durch GLM 5.3 (Werkbank-MCP „challenge“): Diff, Plan oder Council-Entscheidung, über den Melious-Schlüssel der Person.
