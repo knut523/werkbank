@@ -37,7 +37,7 @@ import { baueInbox, inboxZahl, KENNUNG_RE, spaeterBis } from './inbox.ts';
 import { startLeitstand, startLeitstandTick, leitstandLine, overview, strandCards, handoverDraft, meldeHauptchat, meldeBedarf, hinweisFreigabe, hinweisMelious, meldeLeitstand, activeLeitstand } from './leitstand.ts';
 import { meliousSettings, setMelious, removeMelious, meliousKey, meliousUsage, recordMeliousUsage, schwelleText, preiseAktualisieren, meliousChallenge, MELIOUS_ID, bodenGrund } from './melious.ts';
 import { recordZug, recordDelegation, recordChallenge, messungView } from './messung.ts';
-import { endpruefungSammeln, endpruefungUrteil, endpruefungen } from './schutzpfade.ts';
+import { endpruefungSammeln, endpruefungUrteil, endpruefungen, schutzpfadGate } from './schutzpfade.ts';
 import { repoFakten, reviewDetail, freigaben, freigeben, zurueckziehen, pruefeFreigabe, gepusht, listeFreigaben, berichtHash, entscheidungen as leseEntscheidungen, trageEin, bauGateAn, bauGateUrteil } from './freigabe.ts';
 import { berichtKopf, execSummary } from './berichtkopf.ts';
 import { readBericht as readBerichtDatei, reviewDir } from './bericht.ts';
@@ -4118,6 +4118,13 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
         await promisify(execFile)('git', ['-C', klon, 'fetch', '--quiet', 'origin'], { timeout: 60_000 }).catch(() => {});
         return promisify(execFile)('git', ['-C', klon, 'merge-base', '--is-ancestor', vorfahre, sha], { timeout: 10_000 }).then(() => true, () => false);
       },
+      // Paket G: Schutzpfade (Diff gegen die Basis) — Opus-Urteil + Go, sonst kein Push.
+      schutz: async (x) => {
+        const gitq = (args: string[]) => promisify(execFile)('git', ['-C', x.klon, ...args], { timeout: 20_000, encoding: 'utf8' }).then((r) => r.stdout.trim());
+        let dateien: string[] = [];
+        try { const mb = await gitq(['merge-base', x.sha, `origin/${x.base}`]); dateien = (await gitq(['diff', '--name-only', mb, x.sha])).split('\n').filter(Boolean); } catch { return { ok: false, grund: 'Schutzpfade nicht prüfbar (Diff gegen die Basis nicht ermittelbar)' }; }
+        return schutzpfadGate({ strand: `push:${x.repo}#${x.nummer ?? x.zweig}`, titel: `Push ${x.zweig}`, key: x.repo, head: x.sha, dateien, schutzGo: x.schutzGo });
+      },
       // D2: Nachweis bei der Brücke (dort hat Knut die Karte bestätigt); Brücke weg oder anderer Fehler = kein Nachweis.
       nachweis: async (aktion) => {
         try {
@@ -4143,7 +4150,7 @@ on('POST', /^\/internal\/lead\/github-schreiben$/, async (req, res) => {
         } catch { return null; }
       },
       // R30: @fix freigeben — Freigabe-Marke am Fix-Doc (billige Prüfung synchron, prfix.ts); Push im fixTick.
-      fixFreigabe: (fix, neu) => freigabeSetzen(fix, neu, u.id),
+      fixFreigabe: (fix, neu, schutzGo) => freigabeSetzen(fix, neu, u.id, new Date(), { schutzGo }),
       // R30: @fix ablehnen — Eintrag abschließen, Audit, Kommentar-Entwurf ins Paket (prfix.ts fixAblehnenSynchron).
       fixAblehnen: (fix, grund) => fixAblehnenSynchron(fix, grund, u.id),
     });

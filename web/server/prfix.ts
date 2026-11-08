@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { wb } from './db.ts';
+import { schutzpfadGate } from './schutzpfade.ts';
 import { reviewDir } from './bericht.ts';
 import { vienna } from './hygiene.ts';
 import { graphql } from './github.ts';
@@ -321,14 +322,17 @@ async function melde(f: any, text: string, deps: FixDeps) {
 export interface FixFreigabe { at: Date; neu: string; zweig: string; pr: number | null; von: string | null }
 
 /** Setzt die Freigabe-Marke idempotent (fix_freigeben, githubaktion.ts). Nur auf `freigabe_frage` und nur mit passendem SHA. */
-export async function freigabeSetzen(id: string, neu: string, von: string | null, now = new Date()): Promise<{ ok: boolean; grund?: string }> {
+export async function freigabeSetzen(id: string, neu: string, von: string | null, now = new Date(), opts: { schutzGo?: boolean } = {}): Promise<{ ok: boolean; grund?: string }> {
   const f = await fixesCol().findOne({ _id: id as any });
   if (!f) return { ok: false, grund: 'Fix nicht gefunden.' };
   if (f.status !== 'freigabe_frage') return { ok: false, grund: `Fix ist nicht in der Freigabe-Frage (Status: ${f.status}).` };
   if (String(f.neu ?? '') !== neu) return { ok: false, grund: 'SHA passt nicht zum geprüften Stand.' };
   if (f.freigabe) return { ok: true };   // idempotent: schon freigegeben, derselbe Stand
+  // Paket G: Schutzpfade — ohne grünes Opus-Urteil für diesen Kopf und ausdrückliches Go keine Marke.
+  const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: f.frage?.dateien ?? [], schutzGo: opts.schutzGo });
+  if (!sg.ok) return { ok: false, grund: sg.grund };
   const c = await fixesCol().updateOne({ _id: f._id, status: 'freigabe_frage', freigabe: { $exists: false } },
-    { $set: { freigabe: { at: now, neu, zweig: f.zweig, pr: f.number, von }, at: now } });
+    { $set: { freigabe: { at: now, neu, zweig: f.zweig, pr: f.number, von, ...(sg.treffer.length ? { schutzGo: true, schutz: sg.treffer } : {}) }, at: now } });
   return c.modifiedCount ? { ok: true } : { ok: false, grund: 'Freigabe wurde gerade gleichzeitig gesetzt.' };
 }
 
@@ -576,6 +580,9 @@ async function pruefeUndPushe(f: any, s: TickerSettings, deps: FixDeps, g: GitRu
     await audit(f, { ergebnis: 'abgelehnt', von: f.head, nach: neu, zweig: f.zweig, gate, tests: testsAudit, gruende: p.gruende }, now);
     return ablehnen(f, p.gruende, { fix, neu, commits, tests, gate }, deps, now);
   }
+  // Paket G: Schutzpfade — kein Push ohne Opus-Urteil + Go; der Auto-Weg fällt in die Freigabe-Frage.
+  { const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: await fixDateien(f, neu, g), schutzGo: f.freigabe?.schutzGo === true });
+    if (!sg.ok) return frageStellen(f, { ok: false, gruende: [sg.grund!] }, { fix, neu, commits, tests, gate }, dir, g, deps, now); }
   try { await deps.push!(f.repo, klon, neu, f.zweig); }
   catch (e: any) {
     const g2 = [`push rejected (${/non-fast-forward|fetch first|rejected/i.test(String(e?.message)) ? 'branch moved' : 'error'})`];
@@ -633,6 +640,12 @@ async function trocknen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix:
  * `gate.txt`/`tests.md` sind schon da. Status `freigabe_frage` — nicht in LAEUFT, kein Reaper, läuft nie neu an; nur
  * „@fix freigeben“ setzt die Marke, die den Takt fortsetzt. Die Hauptchat-Meldung nennt Paketpfad und Frage.
  */
+/** Dateien, die der Fix gegenüber dem PR-Kopf ändert (für die Schutzpfad-Prüfung). */
+async function fixDateien(f: any, neu: string, g: GitRun): Promise<string[]> {
+  if (neu === f.head) return [];
+  try { return String(await g(['diff', '--name-only', f.head, neu], f.worktree)).split('\n').filter(Boolean); } catch { return []; }
+}
+
 async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { fix: FixJson | null; neu: string; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any }, dir: string, g: GitRun, deps: FixDeps, now: Date) {
   // Die Frage muss einen geprüften Stand zeigen: Ohne die Push-Bedingungen gibt es nichts, was Knut freigeben könnte —
   // die Gründe stehen dann in der Meldung (und der Eintrag bleibt in der Frage, solange nichts freigegeben wurde).
@@ -645,7 +658,7 @@ async function frageStellen(f: any, p: { ok: boolean; gruende: string[] }, x: { 
     if (x.neu !== f.head) writeFileSync(join(dir, 'fix-diff.patch'), kappen(String(await g(['diff', f.head, x.neu], f.worktree))));
   } catch (e: any) { paketFehler = scrub(e?.message ?? e); deps.log?.('pr-fix freigabe paket', { pr: `${f.repo}#${f.number}`, error: paketFehler }); }
   const note = `Freigabe-Frage: ${p.ok ? 'Tests, Gate und Push-Bedingungen grün' : `nicht freigabefähig (${p.gruende.join('; ')})`}${paketFehler ? ` — Paket unvollständig (Schreibfehler: ${paketFehler})` : ''} — Paket ${f.paket}`;
-  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', doneAt: null, neu: x.neu, frage: { at: now, neu: x.neu, zweig: f.zweig, pr: f.number, urteil: p.ok, gruende: p.ok ? [] : p.gruende, gate: x.gate ? { exit: x.gate.exit, hart: x.gate.hart } : null, tests: testsGruen(x.tests) }, note } });
+  await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', doneAt: null, neu: x.neu, frage: { at: now, neu: x.neu, dateien: await fixDateien(f, x.neu, g), zweig: f.zweig, pr: f.number, urteil: p.ok, gruende: p.ok ? [] : p.gruende, gate: x.gate ? { exit: x.gate.exit, hart: x.gate.hart } : null, tests: testsGruen(x.tests) }, note } });
   await audit(f, { ergebnis: 'frage', von: f.head, nach: x.neu, zweig: f.zweig, gate: x.gate, tests: x.tests, gruende: p.gruende }, now);
   deps.log?.('pr-fix freigabe-frage', { pr: `${f.repo}#${f.number}`, urteil: p.ok ? 'push möglich' : 'abgelehnt', modus: fixAuto(f) && !f.freigabe ? 'auto' : 'frage', paket: f.paket });
   // R30a: Im Auto-Modus heißt die Frage „gefallen, deswegen gefragt“ — die Gründe stehen drin, Knut kann trotzdem freigeben.
@@ -683,7 +696,7 @@ async function freigabeLauf(f: any, s: TickerSettings, deps: FixDeps, g: GitRun,
     await melde(f, `Nach der Freigabe nicht gepusht: ${p.gruende.join('; ')} — Frage bleibt offen`, deps);
     return;
   }
-  await pusheAbschluss(f, deps, now, neu, x);
+  await pusheAbschluss(f, deps, now, neu, g, x);
 }
 
 /** Gemeinsamer Prüflauf nach dem Strang (Tests, Gate, PR frisch, Config) — liefert die PushLage-Bestandteile. */
@@ -716,8 +729,15 @@ async function pruefeNachStrang(f: any, deps: FixDeps, g: GitRun, now: Date, neu
 }
 
 /** Push und alles danach (aus pruefeUndPushe extrahiert, damit Freigabe-Lauf denselben Weg geht). */
-async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, x: { fix: FixJson | null; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any; lage: PushLage; dir: string; klon: string }) {
+async function pusheAbschluss(f: any, deps: FixDeps, now: Date, neu: string, g: GitRun, x: { fix: FixJson | null; commits: { sha: string; titel: string }[]; tests: ExecErgebnis | null; gate: any; lage: PushLage; dir: string; klon: string }) {
   const zuGithub = (t: string) => (GEHEIM.test(t) ? null : t);
+  // Paket G: letzte Schranke vor dem Push auch im Freigabe-Lauf (Go muss in der Marke stehen, Urteil für genau diesen Kopf).
+  { const sg = await schutzpfadGate({ strand: String(f._id), titel: `Fix ${f.repo}#${f.number}`, key: String(f.repo), head: neu, dateien: await fixDateien(f, neu, g), schutzGo: f.freigabe?.schutzGo === true });
+    if (!sg.ok) {
+      await fixesCol().updateOne({ _id: f._id }, { $set: { status: 'freigabe_frage', note: sg.grund, at: now }, $unset: { freigabe: '' } });
+      await melde(f, `Nicht gepusht: ${sg.grund}`, deps);
+      return;
+    } }
   try { await deps.push!(f.repo, x.klon, neu, f.zweig); }
   catch (e: any) {
     const g2 = [`push rejected (${/non-fast-forward|fetch first|rejected/i.test(String(e?.message)) ? 'branch moved' : 'error'})`];

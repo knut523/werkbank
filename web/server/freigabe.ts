@@ -22,7 +22,7 @@ import { GIT_SAFE } from './gitsafe.ts';
 import { readBericht, paketDatei, reviewDir, findPaket } from './bericht.ts';
 import { paketFile, PAKET_RE, renderPaketMd } from './reviewpakete.ts';
 import { execSummary } from './berichtkopf.ts';
-import { schutzTreffer, endpruefungAnfordern, endpruefungGruen } from './schutzpfade.ts';
+import { schutzpfadGate } from './schutzpfade.ts';
 
 const err = (status: number, msg: string) => Object.assign(new Error(msg), { status });
 export const freigaben = () => wb().collection('freigaben');
@@ -269,13 +269,9 @@ export async function freigeben(u: User, d: any, seen: { head?: string; patchId?
   const da: any = await freigaben().findOne({ strand: String(d._id), key: f.key, branch: f.branch, head: f.head, revokedAt: null });
   if (da) return publicFreigabe(da);
   // Paket G: Schutzpfade — Opus-Endprüfung (gesammelt vor der Push-Welle) und Knuts ausdrückliches Go, bevor irgendetwas freigegeben wird.
-  const schutz = schutzTreffer(f.dateien);
-  if (schutz.length) {
-    const ep = await endpruefungAnfordern({ strand: String(d._id), titel: String(d.title ?? ''), key: f.key, head: f.head, treffer: schutz });
-    const liste = `${schutz.slice(0, 5).join(', ')}${schutz.length > 5 ? ` (+${schutz.length - 5})` : ''}`;
-    if (!(await endpruefungGruen(String(d._id), f.head))) throw err(409, `Schutzpfade berührt (${liste}) — erst die Opus-Endprüfung (${ep._id}, wird mit den anderen vor der Push-Welle gesammelt), dann dein Go.`);
-    if (seen.schutzGo !== true) throw err(409, `Schutzpfade berührt (${liste}) — die Opus-Endprüfung ist grün; jetzt brauche ich dein ausdrückliches Go für genau diese Dateien (schutzGo).`);
-  }
+  const sg = await schutzpfadGate({ strand: String(d._id), titel: String(d.title ?? ''), key: f.key, head: f.head, dateien: f.dateien, schutzGo: seen.schutzGo });
+  if (!sg.ok) throw err(409, sg.grund!);
+  const schutz = sg.treffer;
   const gepr = gate ? await gate(d, f.head) : null;
   if (gepr && !gepr.ok) throw err(409, gepr.text);
   const doc = { _id: 'f-' + randomUUID().slice(0, 8), userId: u.id, strand: String(d._id), title: d.title, repo: f.dir, key: f.key, branch: f.branch, head: f.head, baseRef: f.baseRef, mergeBase: f.mergeBase, patchId: f.patchId,

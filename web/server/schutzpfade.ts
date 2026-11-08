@@ -65,3 +65,21 @@ export async function endpruefungUrteil(id: string, urteil: 'ok' | 'maengel', by
   const r = await endpruefungen().updateOne({ _id: id as any, status: 'offen' }, { $set: { status: urteil, urteilAt: new Date(), urteilBy: by, text: text.slice(0, 4000) } });
   return r.modifiedCount === 1;
 }
+
+// ---------- Gemeinsame Prüfung für ALLE Freigabe-/Push-Wege ----------
+
+export interface SchutzGate { ok: boolean; treffer: string[]; grund?: string; endpruefung?: string }
+/**
+ * Eine Funktion für jeden Weg, der etwas freigibt oder pusht (freigabe.ts freigeben = Freigabe-Seite UND Inbox-„Ja“,
+ * prfix.ts freigabeSetzen + beide Push-Stellen): berührt der Diff einen Schutzpfad, geht es nur mit grünem Opus-Urteil für
+ * genau diesen Kopf UND ausdrücklichem Go (schutzGo). Sonst ok:false mit Grund; die Endprüfung wird dabei angemeldet.
+ */
+export async function schutzpfadGate(a: { strand: string; titel: string; key: string; head: string; dateien: string[]; schutzGo?: boolean }, env: Env = process.env): Promise<SchutzGate> {
+  const treffer = schutzTreffer(a.dateien, env);
+  if (!treffer.length) return { ok: true, treffer };
+  const ep = await endpruefungAnfordern({ strand: a.strand, titel: a.titel, key: a.key, head: a.head, treffer });
+  const liste = `${treffer.slice(0, 5).join(', ')}${treffer.length > 5 ? ` (+${treffer.length - 5})` : ''}`;
+  if (!(await endpruefungGruen(a.strand, a.head))) return { ok: false, treffer, endpruefung: ep._id, grund: `Schutzpfade berührt (${liste}) — erst die Opus-Endprüfung (${ep._id}, wird mit den anderen vor der Push-Welle gesammelt), dann dein Go.` };
+  if (a.schutzGo !== true) return { ok: false, treffer, endpruefung: ep._id, grund: `Schutzpfade berührt (${liste}) — die Opus-Endprüfung ist grün; jetzt brauche ich dein ausdrückliches Go für genau diese Dateien (schutzGo).` };
+  return { ok: true, treffer, endpruefung: ep._id };
+}

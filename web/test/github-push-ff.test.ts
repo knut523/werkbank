@@ -43,3 +43,12 @@ test('main/develop in jedem anderen Repo bleibt gesperrt', () => {
   for (const [repo, zweig] of [['WirStrom1/olaf-admin', 'main'], ['WirStrom1/olaf-admin', 'develop'], ['WirStrom1/olaf-docs', 'develop'], ['WirStrom1/olaf-tariff-app', 'master']])
     assert.match(String((pruefeAktion({ art: 'push', repo, zweig, klon: KLON }, ENV) as any).fehler), /geschützt/, `${repo} ${zweig}`);
 });
+
+test('Schutzpfade (Paket G): Weg githubaktion push — schutz meldet nicht ok → nichts gepusht; ok → Push; schutzGo wird durchgereicht', async () => {
+  const c: string[] = [];
+  const w = { ...wege(c, { pr: PR, vorfahre: true }), schutz: async (x: any) => { c.push(`schutz go=${x.schutzGo} base=${x.base}`); return x.schutzGo ? { ok: true } : { ok: false, grund: 'Schutzpfade berührt (db/migrations/1.sql)' }; } };
+  await assert.rejects(() => fuehreAus({ art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: KLON, nummer: 7 }, ENV, w as any), /Schutzpfade berührt.*nichts gepusht/);
+  assert.ok(!c.some((x) => x.startsWith('push ')), JSON.stringify(c));
+  const r = await fuehreAus({ art: 'push', repo: 'WirStrom1/x', zweig: 'feat/a', klon: KLON, nummer: 7, schutzGo: true }, ENV, w as any);
+  assert.match(r.text, /Gepusht/); assert.ok(c.includes('schutz go=true base=develop'));
+});

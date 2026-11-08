@@ -61,3 +61,14 @@ test('Zug nach 150k Kontext: frische Sitzung mit Statusblock (kein resume), Hinw
   assert.equal(calls[3].resume, 's-3');
   assert.doesNotMatch(s4.out, /Kontext bei/);
 });
+
+test('Zähler überleben den Neustart (Session-Ablage)', async () => {
+  const { ladeStand, speichereStand } = await import('../src/uebergabe.ts');
+  const f = join(mkdtempSync(join(tmpdir(), 'ueb-')), 'session-uebergabe.json');
+  assert.deepEqual(ladeStand(f), {});
+  speichereStand(f, { c1: { ctx: 151_000, letzte: 'x', erst: 'Auftrag', n: 2 } });
+  const neu = ladeStand(f);   // „Neustart“: frisch von der Platte
+  assert.equal(neu.c1.ctx, 151_000);
+  assert.equal(neu.c1.n, 2);
+  assert.equal(sollUebergeben(neu.c1.ctx, {}), true, 'die Grenze greift auch nach dem Neustart');
+});

@@ -4,6 +4,8 @@
 // und eigene Chats. Abschaltung: BRIDGE_UEBERGABE=aus. ponytail: der Block entsteht aus dem, was die Brücke ohnehin kennt
 // (erste Nachricht, letzte Antwort, geschriebene Dateien) — kein zusätzlicher Modellaufruf.
 
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+
 type Env = Record<string, string | undefined>;
 export const uebergabeAn = (env: Env = process.env) => String(env.BRIDGE_UEBERGABE ?? '').trim().toLowerCase() !== 'aus';
 export const uebergabeGrenze = (env: Env = process.env) => { const n = Number(env.BRIDGE_UEBERGABE_TOKENS); return Number.isFinite(n) && n >= 10_000 ? Math.floor(n) : 150_000; };
@@ -28,7 +30,18 @@ export function offenePunkte(antwort: string): string[] {
   return antwort.split('\n').map((l) => l.trim()).filter((l) => /^[-*]\s*\[ \]/.test(l) || /\b(offen|TODO|noch nicht|fehlt noch)\b/i.test(l)).slice(0, 15).map((l) => l.slice(0, 240));
 }
 
-export interface Stand { ctx: number; letzte: string }
+export interface Stand { ctx: number; letzte: string; n?: number }
+export type StandMap = Record<string, Stand & { erst: string }>;
+
+/** Zähler (Kontextgröße, Zahl der Übergaben, letzte Antwort, erste Nachricht) liegen neben sessions.json und überleben den Neustart. */
+export function ladeStand(file: string): StandMap {
+  try { const j = JSON.parse(readFileSync(file, 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; }
+}
+export function speichereStand(file: string, m: StandMap): void {
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify(m));
+  renameSync(tmp, file);
+}
 export function statusblock(o: { auftrag: string; letzte: string; dateien: string[]; ctx: number }): string {
   const dod = dodWoertlich(o.auftrag);
   const offen = offenePunkte(o.letzte);

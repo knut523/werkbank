@@ -18,7 +18,7 @@ import { leserErweitert, leserOptionen, leserAgents, githubAppend } from './prof
 import { freigabeMerken } from './freigabe.ts';
 import { AUTO_GITHUB_ASK, AUTO_GITHUB_DENY, ROUTINE_ALLOW, routineAllowAn, orchRoots, LIVE_ORDNER, schwaerzeBefehl, classify, readOnlyBash, bashGuardProblem, orchestratorBlock, strangLokal, WORKER_PAKETE, leitstandCheck, statusLine, prepLine, confirmQuestion, questionText, parseAnswer, jiraWriteKeys, VAULT_DIR, AUTO_DENY, ORCH_DENY, LESER_DENY, orchMcpDeny, ANSWER_MARK, neutralizeAnswerAnchors, INBOX_TOOL, inboxKnoepfe, releaseWorktreeProblem, releaseMerge, RELEASE_BLOCK, R31_KLICK, COOLIFY_ASK, JIRA_OHNE_KLICK_ASK } from './tools.ts';
 import { homeFor, ensureHome, applyHome, homesRoot } from './claudehome.ts';
-import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, type Stand as UebergabeStand } from './uebergabe.ts';
+import { kontextVon, sollUebergeben, statusblock, uebergabeHinweis, ladeStand, speichereStand } from './uebergabe.ts';
 import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUebergabe, phaseModell, pickPruefer, risikoMin, klasse, familie, isGitDir, subWorktree, removeWorktree, gitStand, pruefen, abweichungen, heikleDateien, integrationSha, run as runCmd, type Rolle, type Phase, type Abschluss, type GitStand, type PruefErgebnis } from './delegation.ts';
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
@@ -453,7 +453,10 @@ export function lockFor(mine: ZugLite[], next: { readonly: boolean; mode: Permis
 // alles außer „ok“ als „hängt“, nie als „bereit zum Review“ (Plan Heute + Review-Schlange, K1).
 // roundAt: Beginn der letzten echten Runde (eine Antwort auf eine Rückfrage setzt dieselbe Runde fort).
 /** Paket G: je Chat Kontextgröße der letzten Antwort, deren Text und die erste Nachricht (nur im Speicher; nach Neustart der Brücke beginnt die Zählung neu). */
-const uebergabeStand = new Map<string, UebergabeStand & { erst: string }>();
+const uebergabeFile = join(cfg.stateDir, 'session-uebergabe.json');
+const uebergabeMap = ladeStand(uebergabeFile);   // in der Session-Ablage (stateDir) persistiert: Neustart zählt weiter
+const saveUebergabe = () => { try { speichereStand(uebergabeFile, uebergabeMap); } catch { /* Ablage nicht beschreibbar: Zähler bleibt im Speicher */ } };
+const uebergabeStand = { get: (k: string) => uebergabeMap[k], has: (k: string) => k in uebergabeMap, set: (k: string, v: (typeof uebergabeMap)[string]) => { uebergabeMap[k] = v; saveUebergabe(); } };
 const lastSeen = new Map<string, { at: number; turns: number; title: string; written?: string[]; end?: string; roundAt?: number }>();
 
 /** Rundenende merken; ein „ok“ überschreibt kein früheres Problem derselben Runde (z. B. verfallene Rückfrage). */
@@ -950,7 +953,7 @@ function handleMessage(live: Live, msg: any) {
       if (!msg.parent_tool_use_id && !msg.error) {   // Paket G: Kontextgröße und letzte Antwort für die automatische Übergabe
         const ctx = kontextVon(msg.message?.usage);
         const u = uebergabeStand.get(live.key);
-        if (ctx && u) u.ctx = ctx;
+        if (ctx && u && u.ctx !== ctx) { u.ctx = ctx; saveUebergabe(); }
       }
       if (live.melious) meliousCall(live, msg);
       if (!live.modelSeen && !msg.parent_tool_use_id && typeof msg.message?.model === 'string' && !msg.message.model.startsWith('<')) live.modelSeen = msg.message.model.slice(0, 80);
@@ -977,7 +980,7 @@ function handleMessage(live: Live, msg: any) {
           // Schreibende Werkzeuge melden sich erst nach der Bestätigung (siehe Hook).
         } else if (block.type === 'text' && !live.sawStreamText && !msg.parent_tool_use_id && !msg.error) {
           live.progressed = true;
-          { const u = uebergabeStand.get(live.key); if (u) u.letzte = String(block.text ?? '').slice(-4000); }
+          { const u = uebergabeStand.get(live.key); if (u) { u.letzte = String(block.text ?? '').slice(-4000); saveUebergabe(); } }
           emitModelText(live, block.text);
         }
       }
@@ -1633,9 +1636,9 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (!live.worker && resume && sollUebergeben(ust.ctx)) {
     uebergabeBlock = statusblock({ auftrag: orchMap[key]?.auftrag || ust.erst, letzte: ust.letzte, dateien: lastSeen.get(key)?.written ?? [], ctx: ust.ctx });
     emitStatus(live, uebergabeHinweis(ust.ctx));
-    log('uebergabe kontext', { conv: key, ctx: ust.ctx });
+    log('uebergabe kontext', { conv: key, ctx: ust.ctx, uebergabe: (ust.n ?? 0) + 1 });
     delete sessionMap[key]; saveMap();
-    resume = undefined; ust.ctx = 0;
+    resume = undefined; ust.ctx = 0; ust.n = (ust.n ?? 0) + 1; saveUebergabe();
   }
   // Strang-Auftrag für neue Phasen (Plan 165, S3): die erste Nachricht des Strangs; ältere Stränge: erste Nachricht im Verlauf.
   // Ein angemeldeter Wechsel gilt nur im Zug, der ihn angemeldet hat (abgebrochener Zug → verfällt).
