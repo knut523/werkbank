@@ -179,6 +179,16 @@ test('13 Probe: unbekanntes Konto wird beim ersten Sehen probiert, danach höchs
   assert.equal(n, 2); assert.equal(b.kontoFrei('k2'), true);
 });
 
+test('15 meliousFrei je Person: unabhängige Setzungen — heiße Konten: a weicht auf Melious aus, b wartet', () => {
+  b.aktualisiere(cswap([acc(1, 99, 50), acc(2, 99, 60)]), { a: '1', b: '2' });
+  b.setzeMelious('a', true); b.setzeMelious('b', false);
+  assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), '');   // a: Melious frei → kein Wartegrund
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'b' }, T0), /^wartet: Kontingent.*braucht dich/);   // b: wartet
+  b.setzeMelious('a', false);
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), /^wartet: Kontingent/);
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1 }, T0), /^wartet: Kontingent/);   // ohne userId: default false
+});
+
 test('14 Zustand atomar auf Platte: Kalibrierung, Breaker, Hauptchat-Tag, Reset überleben den Neustart', async () => {
   const f = join(mkdtempSync(join(tmpdir(), 'cb-')), 'claudebudget.json');
   b.budgetMerkeIn(f);
@@ -193,4 +203,35 @@ test('14 Zustand atomar auf Platte: Kalibrierung, Breaker, Hauptchat-Tag, Reset 
   b.budgetMerkeIn(f);
   assert.equal(b.kalibriere().opus.pctJe1M, 4); assert.equal(b.hauptchatRest(T0), 7); assert.equal(b._resetVon('a'), T0 + H);
   assert.equal(await b.probeKonto('k2', async () => true, T0 + 1000), 'wartet');   // Backoff überlebt
+});
+
+// ---------- Gegenprüfung (Pass C bridge #4, meliousFrei je Person) ----------
+
+test('16 Prozessweite Setzung setzeMelious(true) erreicht eine Person nicht mehr — stiller Rückfall auf false', () => {
+  // Der Kommentar an setzeMelious sagt: „Alter Aufruf ohne userId (boolean) gilt prozessweit weiter." Er landet aber unter dem
+  // Schlüssel '' und wird nur gelesen, wenn gar keine userId dabei ist (wartenGrund: `o.userId !== undefined ? get(o.userId) : get('')`).
+  // Die Produktion reicht bei jedem Zug eine userId durch (sessions.ts: kapOpt.userId = safeId(req.userId)), also gilt die
+  // prozessweite Setzung dort nie: die Person wartet bei heißen Claude-Konten, statt auf Melious auszuweichen. Ein eigener
+  // Eintrag der Person muss den globalen Wert in beide Richtungen schlagen.
+  b.aktualisiere(cswap([acc(1, 99, 50), acc(2, 99, 60)]), { a: '1', b: '2' });
+  b.setzeMelious(true);
+  assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1 }, T0), '');                  // ohne userId: die globale Setzung gilt
+  assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), '');     // Person ohne eigenen Eintrag: auch hier (rot)
+  b.setzeMelious(false);
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), /^wartet: Kontingent/);
+  b.setzeMelious(true); b.setzeMelious('a', false);                                       // eigener Eintrag schlägt den globalen Wert
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), /^wartet: Kontingent/);
+  b.setzeMelious('a', true);
+  assert.equal(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), '');
+});
+
+test('17 budgetVergessen vergisst die Melious-Freigabe einer Person nicht — der nächste Fall erbt sie', () => {
+  // budgetVergessen ist der Zustand-Reset der Testfälle (beforeEach in dieser Datei) und räumt alles Modul-Zustand weg, was
+  // der Zustand auf Platte kennt. Die neue Map meliousFrei steht nicht darin: ein Fall, der eine Person auf frei setzt,
+  // färbt auf jeden folgenden Fall ab, der ohne eigene Setzung mit dieser Person rechnet.
+  b.aktualisiere(cswap([acc(1, 99, 50)]), { a: '1' });
+  b.setzeMelious('a', true);
+  b.budgetVergessen();
+  b.aktualisiere(cswap([acc(1, 99, 50)]), { a: '1' });                                     // frische Lage, niemand hat Melious gesetzt
+  assert.match(b.claudeBudgetGrund({ rolle: 'bauer', rang: 1, userId: 'a' }, T0), /^wartet: Kontingent/);
 });

@@ -9,6 +9,7 @@ const zahl = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 
 const ms = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? (n < 1e12 ? n * 1000 : n) : null; };
 const H = 3_600_000;
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 export interface KontoLage { id: string; status: 'ok' | 'unbekannt'; fuenfH: number | null; siebenT: number | null; vorPlan: boolean; resetFuenfH: number | null; resetWoche: number | null }
 
@@ -128,7 +129,7 @@ const resets = new Map<string, number>();
 export const resetNotieren = (id: string, until: number) => { resets.set(id, until); speichern(); };
 export const _resetVon = (id: string) => resets.get(id) ?? null;
 /** Nur für Tests. */
-export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); datei = null; };
+export const budgetVergessen = () => { eimer.clear(); probeZ.clear(); lagen.clear(); resets.clear(); zuege.length = 0; tag.clear(); sammler.clear(); letztWoche.clear(); fenster.clear(); meliousFrei.clear(); datei = null; };
 
 // ---------- 5. alle Konten heiß ----------
 export type Verteilung =
@@ -222,9 +223,10 @@ export function rolleVon(o: { leit?: boolean; worker?: boolean; rolle?: string; 
   if (o.phase === 'review') return 'pruefer';
   return o.profil === 'leser' ? 'leser' : 'bauer';
 }
-let meliousFrei = false;
-/** Von sessions.ts gesetzt, wenn Melious für die Person nutzbar ist (Ausweg bei heißen Claude-Konten). */
-export const setzeMelious = (frei: boolean) => { meliousFrei = frei; };
+const meliousFrei = new Map<string, boolean>();
+const safeId = (s: string) => /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);   // wie sessions.ts; nur Schlüssel der Melious-Map, keine Töpfe
+/** Von sessions.ts gesetzt, wenn Melious für die Person (userId) nutzbar ist (Ausweg bei heißen Claude-Konten). Die Setzung gilt unter der rohen UND der gehashten Kennung (safeId): der Leser bildet safeId(o.userId), der Aufrufer darf roh übergeben. Eine Person ohne eigenen Eintrag fällt auf die prozessweite Setzung (boolean) zurück; steht auch die nicht, gilt Melious als nicht frei (altes Verhalten). handleTurn setzt den Eintrag vor der Zulassung, darum trifft der Rückfall nur Aufrufer ohne userId. */
+export const setzeMelious = (userId: string | boolean, frei?: boolean) => { if (typeof userId === 'boolean') { meliousFrei.set('', userId); return; } const f = frei === true; meliousFrei.set(userId, f); meliousFrei.set(safeId(userId), f); };
 
 /** Warteschlange eines Zugs ordnen: Konto mit der meisten Luft zuerst, heiße (ohne Luft) heraus; nie leer, wenn die Eingabe nicht leer war. */
 export function budgetOrdnen<T extends { id: string; kind?: string }>(queue: T[], o: { rang: number; modell: string; bevorzugt?: string | null; now: number }): T[] {
@@ -249,7 +251,7 @@ export function endpruefungKontoFuer(ereignis: string, item: string, now: number
   return plan.items.includes(item) ? plan.konto : null;
 }
 
-function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now: number, env: Record<string, string | undefined>): string {
+function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean; userId?: string }, now: number, env: Record<string, string | undefined>): string {
   if (o.rolle === 'endpruefung') {
     if (o.vorgeprueft !== true) return 'wartet: Endprüfung — erst die Sonnet-Vorprüfung, sonst frisst das Sicherheitsnetz das Limit';
     const e = o.ereignis ?? o.item ?? '', it = o.item ?? e;
@@ -259,7 +261,9 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
   }
   const konten = [...lagen.values()];
   if (!konten.length) return '';
-  const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: meliousFrei ? { modell: 'melious' } : null, now });
+  // Eigenen Eintrag der Person lesen (gehasht oder roh gesetzt); ohne eigenen Eintrag den prozessweiten Wert, sonst aus.
+  const melOk = ((o.userId !== undefined ? (meliousFrei.get(safeId(o.userId)) ?? meliousFrei.get(o.userId)) : undefined) ?? meliousFrei.get('') ?? false) === true;
+  const v = verteile(konten, { rang: o.rang ?? 1, modell: o.modell ?? 'sonnet', kosten: Math.max(1, kostenPunkte(o.modell ?? 'sonnet', 5e5)), melious: melOk ? { modell: 'melious' } : null, now });
   return v.art === 'warte' ? `wartet: Kontingent — ${v.meldung}` : '';
 }
 
@@ -267,7 +271,7 @@ function wartenGrund(o: { rolle?: string; rang?: number; modell?: string; ereign
  * Einhängepunkt für kapazitaetGrund (Strang: wartet in der Schlange) und sessions.ts (Hauptchat: nur Hinweis, nie Schlange).
  * '' = darf. rang kommt später aus Paket D (Vorgabe 1).
  */
-export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
+export function claudeBudgetGrund(o: { rolle?: string; rang?: number; modell?: string; ereignis?: string; item?: string; vorgeprueft?: boolean; userId?: string }, now = Date.now(), env: Record<string, string | undefined> = process.env): string {
   if (!budgetAn(env)) return '';
   if (o.rolle === 'hauptchat') return hauptchatRest(now, env) <= 0 ? `wartet: Tagesbudget — Hauptchat hat seine ${hauptchatTagesBudget(env)} % Wochenanteil für heute verbraucht (morgen wieder)` : '';
   return wartenGrund(o, now, env);
