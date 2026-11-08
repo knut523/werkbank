@@ -8,9 +8,10 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { g, UEB, repo } from './delegation-hilfe.ts';
+import { freiePorts } from './port-hilfe.ts';
 
 
-const PORT = 3494;
+const PORT = Number(process.env.WERKBANK_TEST_DELEGATION_PORT) || (await freiePorts(1))[0];
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-deleg-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-deleg-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-deleg-'));

@@ -17,8 +17,9 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { strandDeny } from '../src/sessions.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3396;
+const PORT = Number(process.env.WERKBANK_TEST_WAECHTER_PORT) || (await freiePorts(1))[0];
 const STATE = mkdtempSync(join(tmpdir(), 'wa-state-'));
 const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'wa-orch-')));
 const HOMES = mkdtempSync(join(tmpdir(), 'wa-homes-'));
