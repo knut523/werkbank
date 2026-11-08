@@ -1658,6 +1658,10 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (live.orch || live.leit) setTurn(key, { start: Date.now(), end: null, outcome: null, ...(live.leit ? { batch } : {}) });
   lives.set(key, live);
   angemeldet();   // Plan 213 S1a: ab jetzt zählt dieser Zug — die Schlange darf den Nächsten prüfen
+  // F4 (Gegenprüfung Runde 3): die frühe Melious-Setzung in handleTurn hat die Anmeldung verzögert — ein Worker, dessen
+  // Lead-Zug in dieser Lücke endete, wurde von abortWorkersOf nicht mehr getroffen und lief weiter. Nachholen: schon
+  // abgebrochen → sofort beenden (gleiche Wirkung wie abortWorkersOf, das den Zug dann nicht mehr sieht).
+  if (live.worker) { const d = [...delegs.values()].find((x) => x.workerKey === key); if (d?.aborted) { lives.get(key)?.abort.abort(); log('worker abgebrochen (Lead-Zug zu Ende)', { id: d.id, parent: d.parent, nachholen: true }); } }
   attach(live, req.sink);
   // Sofort ein Lebenszeichen: bis zum ersten Token vergehen mit echtem Claude einige Sekunden
   // (CLI-Start, MCP-Server, langer System-Prompt, Denken).
