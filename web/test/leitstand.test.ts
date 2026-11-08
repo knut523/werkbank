@@ -15,6 +15,7 @@ import { MongoClient, ObjectId } from 'mongodb';
 import { strandEvent, hangMs, weiterEvent, wakeText, decideWake, wakeCfg, urgentAnswer, brauchtFelder } from '../server/leitstand.ts';
 import { orchStatus, AUTO_RATE_MS } from '../server/orchestrator.ts';
 import { featuresFor, teamFeatures } from '../server/features.ts';
+import { freiePorts } from '../../claude-bridge/test/port-hilfe.ts';
 
 const WEB = join(import.meta.dirname, '..');
 
@@ -131,7 +132,9 @@ test('Freigabe (DoD 2): Leitstand nur für Admins, auch nicht über WERKBANK_TEA
 
 // ---------- Ende-zu-Ende ----------
 
-const PORT = Number(process.env.WERKBANK_TEST_LEIT_PORT || 3173), BRIDGE_PORT = Number(process.env.WERKBANK_TEST_LEIT_BRIDGE_PORT || 3193);
+// Freie Ports statt fester Vorgaben: 3173/3193 waren auf dieser Maschine von fremden Diensten belegt, der Test lief dann gegen sie.
+const [freiWeb, freiBruecke] = await freiePorts(2);
+const PORT = Number(process.env.WERKBANK_TEST_LEIT_PORT || freiWeb), BRIDGE_PORT = Number(process.env.WERKBANK_TEST_LEIT_BRIDGE_PORT || freiBruecke);
 const B = `http://127.0.0.1:${PORT}`;
 const tag = randomBytes(4).toString('hex');
 const DB = `werkbank_leit_test_${tag}`, LCDB = `librechat_leit_test_${tag}`;
@@ -214,7 +217,7 @@ before(async () => {
       BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: `${knut.email},${team.email}`, WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), LEITSTAND_MCP_FILE: join(tmp, 'keins.json') },
     stdio: 'ignore',
   });
-  webEnv = { ...process.env, WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
+  webEnv = { ...process.env, WERKBANK_HAUPTCHAT_TAKT_MS: '1000', WERKBANK_PORT: String(PORT), WERKBANK_DEMO: '1', WERKBANK_TEAM_FEATURES: 'heute,orchestrator', WERKBANK_NO_JOBS: '1', WERKBANK_INSECURE_COOKIES: '1', WERKBANK_VAULT_DIR: join(tmp, 'vault'),
     WERKBANK_DB: DB, LIBRECHAT_DB: LCDB, LIBRECHAT_URL: `http://127.0.0.1:${(lcFake.address() as any).port}`, LIBRECHAT_PUBLIC_URL: 'https://chat.example',
     BRIDGE_URL: `http://127.0.0.1:${BRIDGE_PORT}`, BRIDGE_STATE_DIR: state, WERKBANK_ALLOWED_EMAILS: `${knut.email},${team.email},${admin2.email}`, WERKBANK_PILOT_EMAIL: knut.email,
     WERKBANK_INTERNAL_TOKEN: INTERNAL, JWT_SECRET, JWT_REFRESH_SECRET: REFRESH_SECRET, WERKBANK_DATA_DIR: join(tmp, 'data'),

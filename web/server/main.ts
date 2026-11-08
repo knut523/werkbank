@@ -5050,7 +5050,7 @@ const orchDeps = {
 };
 startAutoWeiter(orchDeps);
 // Audit 05.11. (4): eingereihte Texte an den Hauptchat zustellen, sobald er frei ist.
-setInterval(() => { hauptchatTakt().catch(() => {}); }, 20_000).unref();
+setInterval(() => { hauptchatTakt().catch(() => {}); }, Number(process.env.WERKBANK_HAUPTCHAT_TAKT_MS) || 20_000).unref();   // Takt einstellbar (Tests: kurz), Vorgabe 20 s
 // Stand je Strang festschreiben (Teil B, G1) — unabhängig vom Auto-Fortsetzen; ORCH_STATUS=off schaltet ab.
 startStatusTick(orchDeps);
 // Plan 213 S1b (K1, P3): fertige, gesehene Unter-Chats nach 24 h wegräumen — nur mit WERKBANK_AUTO_SCHLIESSEN=1 (mit der Inbox).
