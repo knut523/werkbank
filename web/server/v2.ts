@@ -811,7 +811,7 @@ export function registerV2(on0: On, d: V2Deps) {
     const conv = url.searchParams.get('conv');
     const liste = await eigen.meineChats(u);
     const nachrichten = conv ? await eigen.verlauf(u, conv, url.searchParams.get('seit') ?? undefined) : [];
-    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft'), vorlagen: (d.vorlagen?.() ?? []).map((v) => ({ name: v.name, label: v.label, beschreibung: v.beschreibung })),
+    send(d, res, { ziel, zugang, chats: liste, conv: conv ?? null, modell: conv ? await eigen.chatModell(u, conv) : null, nachrichten, laeuft: nachrichten.some((x) => x.status === 'laeuft'), vorlagen: (d.vorlagen?.() ?? []).map((v) => ({ name: v.name, label: v.label, beschreibung: v.beschreibung })),
       funktionen: { anhang: eigen.anhangAn(), modellwahl: eigen.modellwahlAn(), modelle: Object.entries(eigen.MODELLE).map(([wert, m]) => ({ wert, label: m.label })), anhangMaxMb: Math.round(eigen.anhangMaxBytes() / 1048576) } });
   });
   on('POST', /^\/api\/v2\/chat$/, async (req, res) => {

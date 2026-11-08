@@ -155,3 +155,19 @@ test('Modellwahl je Chat: gespeichert, an die Brücke durchgereicht, später än
   await chat.senden({ ...u, id: 'u-modell2' }, { text: 'ohne' }, deps(b0));
   assert.equal(b0.aufrufe[0].body.model, 'claude-code', 'ohne Wahl: Vorgabe wie bisher');
 });
+
+test('Modellwahl: ein älterer Chat (nicht unter den neuesten 30) behält sein Modell, wenn die Nachricht keines mitschickt', async () => {
+  const uO = { ...u, id: 'u-modell-alt' };
+  const deps = (br: any) => ({ bridgeUrl: 'http://bruecke', token: async () => 't', fetch: br.f });
+  const b1 = bruecke(); b1.los();
+  const alt = await chat.senden(uO, { text: 'alt', modell: 'opus' }, deps(b1));
+  await bis(async () => (await chat.verlauf(uO, alt.conv)).some((n) => n.status === 'fertig' && n.rolle === 'assistent'));
+  for (let i = 0; i < 31; i++) { const b = bruecke(); b.los(); const r = await chat.senden(uO, { text: `neu${i}` }, deps(b)); await bis(async () => (await chat.verlauf(uO, r.conv)).some((n) => n.status === 'fertig' && n.rolle === 'assistent')); }
+  assert.ok(!(await chat.meineChats(uO)).some((c) => c.conv === alt.conv), 'der alte Chat fehlt in der Liste');
+  assert.equal(await chat.chatModell(uO, alt.conv), 'opus', 'das Modell kommt trotzdem mit dem Chat');
+  const b2 = bruecke(); b2.los();
+  await chat.senden(uO, { text: 'weiter', conv: alt.conv }, deps(b2));
+  assert.equal(b2.aufrufe[0].body.model, 'claude-code-opus');
+  assert.equal(await chat.chatModell(uO, alt.conv), 'opus');
+  assert.equal(await chat.chatModell(uO, 'v2-00000000-0000-0000-0000-000000000000'), null);
+});

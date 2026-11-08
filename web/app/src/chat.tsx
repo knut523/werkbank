@@ -9,7 +9,7 @@ import { ohneStatuszeilen, wann } from './format.ts';
 import { OLAF_KURZ, OLAF_MEHR } from './begriffe.ts';
 
 interface Nachricht { id: string; rolle: 'ich' | 'assistent'; text: string; at: string; status: string; fehler?: string | null; anhaenge?: string[] }
-interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null; modell?: string }[]; funktionen?: { anhang: boolean; modellwahl: boolean; modelle: { wert: string; label: string }[]; anhangMaxMb: number }; conv?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
+interface Stand { ziel: 'hauptchat' | 'eigen'; zugang: boolean; nachrichten: Nachricht[]; laeuft: boolean; hauptchat?: { url: string | null } | null; chats?: { conv: string; titel: string; vorlage?: string | null; modell?: string }[]; funktionen?: { anhang: boolean; modellwahl: boolean; modelle: { wert: string; label: string }[]; anhangMaxMb: number }; conv?: string | null; modell?: string | null; vorlagen?: { name: string; label: string; beschreibung: string }[]; eingereiht?: { text: string; at: string }[] }
 
 /** Runde 7 (Abgleich: „Hauptchat starten“ fehlte in 2.0, 1 004 Züge hängen am Hauptchat): derselbe Weg wie in der alten Werkbank —
  *  Release 2.0: mit dem Übergabe-Entwurf (offene Unter-Chats, Rückfragen, Entscheidungen), sonst lehnt der Server mit 400 ab. */
@@ -33,6 +33,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   const [stand, setStand] = useState<Stand | null>(null);
   const [text, setText] = useState('');
   const [modell, setModell] = useState('');   // Paket G: Modell je Chat (leer = Vorgabe); bei einem bestehenden Chat der gespeicherte Wert
+  const geaendert = useRef(false);   // nur eine Wahl des Nutzers (oder die erste Nachricht eines neuen Chats) geht als `modell` an den Server, nie ein Echo
   const [dateien, setDateien] = useState<{ name: string; mime: string; daten: string }[]>([]);
   const [vorlage, setVorlage] = useState('');   // S22: Vorlage für einen neuen 2.0-Chat
   const [sendet, setSendet] = useState(false);
@@ -47,8 +48,12 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
   // Geschlossen: beim nächsten Öffnen wieder der Normalfall (Hauptchat bzw. neuer Chat), nicht der zuletzt gewählte (Pass C).
   useEffect(() => { if (!offen) { setConv(null); setUnter(false); setZiel(app.ich.admin ? 'hauptchat' : 'eigen'); } }, [offen]);
 
-  // Paket G: Modell des geöffneten Chats übernehmen; neuer Chat: Vorgabe
-  useEffect(() => { setModell(ziel === 'eigen' && conv ? stand?.chats?.find((c) => c.conv === conv)?.modell ?? '' : ''); }, [conv, ziel, stand?.chats?.find((c) => c.conv === conv)?.modell]);
+  // Paket G: Modell des geöffneten Chats vom Server übernehmen (kommt mit dem Chat, auch für ältere als die 30 der Liste);
+  // solange der Stand noch nicht zu diesem Chat gehört (frisch angelegt), bleibt die Anzeige, wie sie ist.
+  useEffect(() => {
+    if (!conv || ziel !== 'eigen') { setModell(''); geaendert.current = false; return; }
+    if (stand?.conv === conv && typeof stand.modell === 'string') { setModell(stand.modell); geaendert.current = false; }
+  }, [conv, ziel, stand?.conv, stand?.modell]);
   async function dateiWaehlen(l: FileList | null) {
     const max = (stand?.funktionen?.anhangMaxMb ?? 4) * 1048576;
     const neu: { name: string; mime: string; daten: string }[] = [];
@@ -89,8 +94,8 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
     unterwegs.current = true;
     setSendet(true); setFehler(null);
     try {
-      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}), ...(ziel === 'eigen' && stand?.funktionen?.modellwahl ? { modell } : {}), ...(ziel === 'eigen' && dateien.length ? { anhaenge: dateien } : {}) });
-      setDateien([]);
+      const r = await schicke<{ conv?: string }>('api/v2/chat', { ziel, text: t, conv: ziel === 'eigen' ? conv : undefined, ...(ziel === 'eigen' && !conv && vorlage ? { vorlage } : {}), ...(ziel === 'eigen' && stand?.funktionen?.modellwahl && (!conv || geaendert.current) ? { modell } : {}), ...(ziel === 'eigen' && dateien.length ? { anhaenge: dateien } : {}) });
+      setDateien([]); geaendert.current = false;
       setText((jetzt) => (jetzt.trim() === t ? '' : jetzt));   // D3: was während des Sendens getippt wurde, bleibt stehen
       if (ziel === 'eigen' && r.conv) setConv(r.conv);
       setWarten(ziel === 'hauptchat' ? 80 : 4);
@@ -112,7 +117,7 @@ export function ChatLeiste({ offen, vorbereitet, convWahl, schliessen }: { offen
           </div>
         )}
         {!unter && ziel === 'eigen' && stand?.funktionen?.modellwahl && (
-          <label className="klein modell-wahl">Modell <select value={modell} onChange={(e) => setModell(e.target.value)} aria-label="Modell dieses Chats">
+          <label className="klein modell-wahl">Modell <select value={modell} onChange={(e) => { geaendert.current = true; setModell(e.target.value); }} aria-label="Modell dieses Chats">
             {stand.funktionen.modelle.map((m) => <option key={m.wert} value={m.wert}>{m.label}</option>)}
           </select></label>
         )}
