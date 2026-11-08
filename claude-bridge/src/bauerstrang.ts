@@ -1,7 +1,7 @@
 // Einhängepunkt für Best-of-N im OC2-Strang (sessions.ts strangOc2): beide Flash-Bauer bauen in eigenen Unter-Worktrees (subWorktree),
 // der Sieger-Diff landet im Strang-Worktree. Alles Äußere (Zug, Prüfungen) wird injiziert, damit der Test ohne Modelle läuft.
 // null = alter Pfad (Best-of-N aus, kein Git, abgeschaltet). Schutzzone (aus den Pfaden im Auftrag) → { ok: false } → Claude baut.
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { mitDeckel, bauerDeckelMs, abbruchFristMs, DECKEL_LOG, bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
@@ -103,6 +103,18 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
     let d = dirname(f); while (d !== '.' && !existsSync(join(dir, d, 'package.json'))) d = dirname(d);
     return pruefLauf(join(dir, d), 'env', ['-u', 'NODE_TEST_CONTEXT', 'node', '--test', d === '.' ? f : f.slice(d.length + 1)]);
   }
+  /** Der Prüfer darf nur NEUE Testdateien schreiben: alles andere (geänderte/gelöschte getrackte Dateien, neue Nicht-Tests) wird auf den Stand vor dem Prüfer zurückgesetzt (Index = Stand nach diffVon). */
+  async function nurTests(dir: string): Promise<void> {
+    const zeilen = (await git(dir, '-c', 'core.quotepath=false', 'status', '--porcelain', '-uall')).out.split('\n').filter((z) => z.length > 3);
+    const weg: string[] = [];
+    for (const z of zeilen) {
+      const x = z[0], y = z[1], f = z.slice(3);
+      if (y === 'M' || y === 'D' || y === 'T') { await git(dir, 'checkout', '--', f); weg.push(f); }
+      else if (x === '?' && !/\.test\.[cm]?[jt]s$/.test(f)) { rmSync(join(dir, f), { force: true }); weg.push(f); }
+    }
+    if (weg.length) gateLog.push(`Prüfer änderte Nicht-Test: ${weg.join(', ')}, verworfen`);
+  }
+  const pruefTests = new Set<string>();
   /** Prüfschleife am Kandidaten (in dessen Unter-Worktree), danach voller Lauf erneut. Rot/ohne Ergebnis/Deckel → { ok: false }. Setzt k.diff auf den Diff samt Fix und Prüfer-Tests. */
   async function strangPruefen(k: { bauer: string; diff: string }): Promise<{ ok: boolean; log: string }> {
     const s = subs.get(k.bauer)!; geschleift.add(k);
@@ -113,14 +125,24 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
         const dif = (await diffVon(s.dir, s.base)).slice(0, 60_000);
         const tests = [...new Set([...dif.matchAll(/^diff --git a\/\S+ b\/(\S+\.test\.[cm]?[jt]s)$/gm)].map((m) => m[1]))];
         const text = await gedeckelt(s.dir, pruefer, `${linse}\n\n## DoD\n${o.prompt}\n\n## Diff\n${dif}\n\n## Tests im Diff\n${tests.join('\n') || '(keine)'}`);
-        return { text, tests: await neueTests(s.dir) };
+        await nurTests(s.dir);
+        const neu = await neueTests(s.dir); neu.forEach((t) => pruefTests.add(t));
+        return { text, tests: neu };
       },
       rotAufHead: async (tests) => {
         const rot: string[] = [], logs: string[] = [];
         for (const f of tests) { const r = await testLauf(s.dir, f); if (!r.ok) { rot.push(f); logs.push(`${f}\n${r.log.slice(-2000)}`); } }
         return { rot, log: logs.join('\n---\n') };
       },
-      fixen: async (fehler) => { await gedeckelt(s.dir, k.bauer, `## Fixrunde\nDie Bridge hat Tests des Prüfers auf deinem Stand laufen lassen; diese sind rot. Behebe den Fehler im Produktcode, ändere die Tests nicht.\n\n${BAUER_REGELN}\n\n## DoD\n${o.prompt}\n\n## Rote Tests\n${fehler.slice(-6000)}`); },
+      fixen: async (fehler) => {
+        const vorher = new Map([...pruefTests].map((t): [string, Buffer | null] => [t, existsSync(join(s.dir, t)) ? readFileSync(join(s.dir, t)) : null]));
+        await gedeckelt(s.dir, k.bauer, `## Fixrunde\nDie Bridge hat Tests des Prüfers auf deinem Stand laufen lassen; diese sind rot. Behebe den Fehler im Produktcode, ändere die Tests nicht.\n\n${BAUER_REGELN}\n\n## DoD\n${o.prompt}\n\n## Rote Tests\n${fehler.slice(-6000)}`);
+        const geaendert = [...vorher].filter(([t, inhalt]) => inhalt && !(existsSync(join(s.dir, t)) && readFileSync(join(s.dir, t)).equals(inhalt)));
+        if (!geaendert.length) return;
+        for (const [t, inhalt] of geaendert) { mkdirSync(dirname(join(s.dir, t)), { recursive: true }); writeFileSync(join(s.dir, t), inhalt!); }
+        gateLog.push(`Fixer änderte Prüfer-Test: ${geaendert.map(([t]) => t).join(', ')}, zurückgesetzt`);
+        return 'manipuliert';
+      },
     });
     phasen = e.phasen;
     gateLog.push(`Strang-Prüfung: ${e.ende}, ${e.runden} Runde(n), rot gesehen: ${e.roteTests.join(', ') || '-'}, offen: ${e.offen.join(', ') || '-'}`);

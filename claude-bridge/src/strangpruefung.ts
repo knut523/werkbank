@@ -23,7 +23,7 @@ export function ergebnisLesen(text: string): Ergebnis {
   return treffer[2] !== undefined ? { art: 'rot', n: Number(treffer[2]) } : { art: 'keine' };
 }
 
-export type Ende = 'konvergiert' | 'deckel' | 'pruefer-ohne-ergebnis';
+export type Ende = 'konvergiert' | 'deckel' | 'pruefer-ohne-ergebnis' | 'manipuliert';
 export type Phase = { runde: number; testMs: number; pruefMs: number; fixMs: number };
 export type SchleifenDeps = {
   /** Prüfer mit dieser Linse: Endtext und die von ihm geschriebenen Testdateien. */
@@ -31,7 +31,8 @@ export type SchleifenDeps = {
   /** Bridge lässt die Tests auf dem aktuellen HEAD laufen; nur rote zählen. */
   rotAufHead: (tests: string[]) => Promise<{ rot: string[]; log: string }>;
   /** Bauer-Fixrunde mit dem Log der neuen roten Tests. */
-  fixen: (log: string, runde: number) => Promise<void>;
+  /** 'manipuliert' = der Fixer hat Prüfer-Tests angefasst (vom Aufrufer zurückgesetzt): Schleife endet, nie sauber. */
+  fixen: (log: string, runde: number) => Promise<void | 'manipuliert'>;
   jetzt?: () => number;
 };
 export type SchleifenErgebnis = { ende: Ende; runden: number; roteTests: string[]; offen: string[]; phasen: Phase[] };
@@ -56,7 +57,8 @@ export async function pruefSchleife(deps: SchleifenDeps, maxRunden = 4): Promise
     const fertig = (ende: Ende): SchleifenErgebnis => ({ ende, runden: runde, roteTests: [...gesehen], offen: [...rot], phasen });
     if (!rot.length) return fertig(ohne ? 'pruefer-ohne-ergebnis' : 'konvergiert');
     if (runde >= maxRunden) return fertig('deckel');
-    await deps.fixen(log, runde);
+    const f = await deps.fixen(log, runde);
     phase.fixMs = jetzt() - t2;
+    if (f === 'manipuliert') return fertig('manipuliert');
   }
 }
