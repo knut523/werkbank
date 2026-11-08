@@ -99,3 +99,21 @@ test('Plan ohne Pfade, Bauer ändert migrations/: Diff berührt Schutzzone → n
   assert.equal(o?.ok, true); assert.equal(readFileSync(join(cwd, 'src/a.ts'), 'utf8'), zeilen(2));
   rmSync(wurzel, { recursive: true, force: true });
 });
+
+test('P8: Deckel → zug sieht Abbruch; Unter-Worktree wird erst nach dessen Ende entfernt, danach schreibt der Bauer nicht mehr', async () => {
+  const { wurzel, cwd } = repo(); const dirs: string[] = []; const signale: (AbortSignal | undefined)[] = []; let schriebDanach = false, beendet = 0;
+  const haengt = async (dir: string, _m: string, _p: string, signal?: AbortSignal) => {
+    dirs.push(dir); signale.push(signal);
+    for (let i = 0; i < 60 && !signal?.aborted; i++) { if (!existsSync(dir)) schriebDanach = true; else writeFileSync(join(dir, 'src/a.ts'), zeilen(2)); await new Promise((r) => setTimeout(r, 10)); }
+    await new Promise((r) => setTimeout(r, 40)); beendet++;   // der Abbruch braucht einen Moment (interrupt → Sitzung ruhig)
+    if (!existsSync(dir)) schriebDanach = true;
+    return { ok: false, text: '', grund: 'abgebrochen' };
+  };
+  try {
+    await bestofnStrang({ cwd, id: 'p8', prompt: 'ändere src/a.ts', env: { BRIDGE_BAUER_DECKEL_S: '0.05' }, zug: haengt, pruefe });
+    assert.ok(signale.length >= 2 && signale.every((s) => s?.aborted), 'zug bekam ein abgebrochenes Signal');
+    assert.equal(beendet, signale.length, 'beide Bauer bestätigten den Abbruch');
+    assert.equal(schriebDanach, false, 'kein Schreibzugriff in einen entfernten Worktree');
+    assert.ok(dirs.every((x) => !existsSync(x)), 'Unter-Worktrees entfernt');
+  } finally { rmSync(wurzel, { recursive: true, force: true }); }
+});

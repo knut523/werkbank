@@ -15,7 +15,7 @@ export interface StrangRennen {
   /** Nutzer-Konto: gesetzt → Melious-Budget entscheidet über die Sonnet-Klasse (Melious leer → Sonnet baut). */
   userId?: string;
   /** Ein Bauer-Zug in einem Unter-Worktree (OC2 über denselben Pool wie der normale Strang-Zug). */
-  zug(dir: string, modell: string, prompt: string): Promise<{ ok: boolean; text: string; grund: string }>;
+  zug(dir: string, modell: string, prompt: string, signal?: AbortSignal): Promise<{ ok: boolean; text: string; grund: string }>;
   /** Prüfbefehle des Repos (tsc/lint = schnell, alles = voll) im Worktree; die Semaphor-Klammer setzt dieses Modul. */
   pruefe(dir: string, base: string, art: 'schnell' | 'voll'): Promise<{ ok: boolean; log: string; tsc?: boolean; lint?: boolean }>;
   status?(t: string): void;
@@ -64,7 +64,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
       subs.set(bauer, { dir: s.dir, base: s.base });
       o.status?.(`⏳ Best-of-N: ${bauer} baut in eigenem Worktree …`);
       const p = op?.fehlerlogs?.length ? `${a.plan}\n\n## Fehlerlogs der vorigen Bauer (nicht wiederholen)\n${op.fehlerlogs.join('\n---\n').slice(-6000)}` : a.plan;
-      const r = await o.zug(s.dir, bauer, p);
+      const r = await o.zug(s.dir, bauer, p, op?.signal);
       texte.set(bauer, r.text);
       await git(s.dir, 'add', '-A');
       const diff = (await git(s.dir, 'diff', '--cached', '--binary', '--no-color', s.base)).out;

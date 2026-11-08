@@ -2709,9 +2709,9 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
     try { req.onTurnLog?.({ conv: req.convId, art: 'strang', phase: o.phase ?? null, konto: o.konto, anbieter: o.anbieter, laeufer: o.laeufer, aufgabe: o.aufgabe, modell: o.laeufer === 'oc2' ? `${o.modell} (opencode2)` : o.modell, input: o.usage.input + o.usage.cacheRead, output: o.usage.output, cacheRead: o.usage.cacheRead, energie: o.energie, outcome: o.outcome, ms: o.ms } as ZugLog); } catch { /* egal */ }
   };
   // Ein Bauer-Zug in einem fremden Worktree (Best-of-N): wie der Strang-Zug, gebucht, ohne Sitzungsfortsetzung.
-  const ocZug = async (dir: string, m: string, pr: string) => {
+  const ocZug = async (dir: string, m: string, pr: string, signal?: AbortSignal) => {
     const t0 = Date.now();
-    const r = await pool.zug({ cwd: dir, prompt: pr, model: m, timeoutS: envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60), abbruch: () => live.abort.signal.aborted, titel: `bestofn ${m}`,
+    const r = await pool.zug({ cwd: dir, prompt: pr, model: m, timeoutS: envZahl('BRIDGE_JCODE_STRANG_TIMEOUT_S', 3600, 60), abbruch: () => live.abort.signal.aborted || !!signal?.aborted, titel: `bestofn ${m}`,
       rechte: oc2Schreibrechte(linksNachDraussen(dir), ['werkbank_*']), pruefe: (n) => oc2SchreibtDraussen(n, (x) => !!schreibzielProblem(x, dir)) });
     buche({ anbieter: 'melious', konto: mel.id, laeufer: 'oc2', aufgabe: 'bau', modell: r.gelaufen, usage: r.usage, energie: mel.faktoren ? energieOf(r.usage, r.gelaufen, mel.faktoren) : 0, outcome: r.code === 0 ? 'ok' : 'fehler', ms: Date.now() - t0, phase: 'best-of-n' });
     const x = jcodeStrangErgebnis({ code: r.code, j: r.code === 0 ? { text: r.text } : null, draussen: r.draussen });
