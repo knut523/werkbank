@@ -67,7 +67,7 @@ Die Strang-Prüfschleife (Bauer → Gegenprüfer → Mutation) zieht wie dort ge
 ## DoD (wörtlich, je Punkt prüfbar)
 
 - **R1** Test: `starte` eines `sh -c 'sleep 600 & wait'` → Eintrag in `liste()` und `prozesse.json` mit pid, start, besitzer, fristAt; `beenden(besitzer)` → Kind und Enkel tot (ESRCH), Eintrag weg. Fremde PID (pid passt, Startzeit nicht) wird **nicht** getötet. Rot vor Bau (Modul fehlt), grün danach. testlink-Tests unverändert grün.
-- **R2** Test: `prozesse.json` mit lebender eigener Gruppe (aus Hilfsprozess) + einem fremden Eintrag (falsche Startzeit) → nach Start-Aufräumen eigene Gruppe tot, fremder Prozess lebt.
+- **R2** Test: `prozesse.json` mit lebender eigener Gruppe (aus Hilfsprozess) + einem fremden Eintrag (falsche Startzeit) → nach Start-Aufräumen eigene Gruppe tot, fremder Prozess lebt. **Zusatz aus R1-Review:** nach Absturz kann der Leader tot, die Gruppe aber lebendig sein (kein `exit`-Handler lief) → Aufräumen sucht per `/proc/*/stat` alle Prozesse mit `pgid == eintrag.pid` und Startzeit ≥ `eintrag.start` und beendet sie; Test: Leader per SIGKILL weg, Enkel lebt → nach Aufräumen tot.
 - **R3** Test: Bridge mit laufendem `starte`-Kind, SIGTERM an die Bridge → nach Ende kein Prozess der Gruppe lebt. `werkbank.sh stop` tötet `-pgid` (Skripttest).
 - **R4** Test: Fake-jcode, der `sleep 600 &` startet und SIGTERM ignoriert → nach Timeout bzw. Abbruch Kind + Enkel tot binnen Frist + 6 s.
 - **R5** Test: `run()` und `pruefLauf` mit AbortSignal: Abbruch → Gruppe tot; Timeout → Gruppe tot (P7-Tests weiter grün).
