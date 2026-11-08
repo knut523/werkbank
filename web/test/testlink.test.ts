@@ -2,7 +2,7 @@
 // Proxy (Sitzung, Host, Ablauf, Streaming, statisch), Lebenszyklus mit echtem Proxy und Attrappen-Profilen, Routen ohne Geheimnisse.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -12,7 +12,23 @@ import * as tl from '../server/testlink.ts';
 import { cookieZeile, hostErlaubt, statischeDatei, proxyServer } from '../server/testlink-proxy.ts';
 import { registerTestlinks, testlinkIntern, zielOrdner, type TestlinkDeps } from '../server/testlinkroutes.ts';
 
-process.env.WERKBANK_TESTLINK_PORTE = '38600-38699';
+// Je Testlauf eine eigene Zehnerscheibe aus 38600–38699 (atomar per mkdir, Besitzer-PID gegen Reste abgestürzter Läufe): Port-Wahl ist
+// „prüfen, dann nutzen“ und prozessübergreifend nicht abgesichert — zwei Läufe mit demselben Bereich bekämen dieselben Ports und sprächen mit fremden Proxys.
+function portScheibe(): string {
+  for (let n = 0; n < 10; n++) {
+    const d = join(tmpdir(), `wb-testlink-porte-${n}`);
+    const belegen = () => { try { mkdirSync(d); writeFileSync(join(d, 'pid'), String(process.pid)); return true; } catch { return false; } };
+    if (!belegen()) {
+      let alt = 0; try { alt = Number(readFileSync(join(d, 'pid'), 'utf8')); } catch { /* im Entstehen: belegt */ continue; }
+      if (alt > 0 && existsSync(`/proc/${alt}`)) continue;
+      rmSync(d, { recursive: true, force: true }); if (!belegen()) continue;
+    }
+    process.on('exit', () => rmSync(d, { recursive: true, force: true }));
+    return `386${n}0-386${n}9`;
+  }
+  throw new Error('Keine freie Port-Scheibe (38600–38699) für den Testlauf.');
+}
+process.env.WERKBANK_TESTLINK_PORTE = portScheibe();
 const tmp = (p = 'tl-') => mkdtempSync(join(tmpdir(), p));
 const warte = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const get = (port: number, pfad: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }>((ok, nein) => {

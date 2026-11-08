@@ -20,7 +20,9 @@ export interface StarteOpt {
 export function procStart(pid: number): string | null {
   try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19] ?? null; } catch { return null; }
 }
-export const lebt = (p: { pid: number; start: string | null }) => p.pid > 1 && !!p.start && procStart(p.pid) === p.start;
+/** Lebt = gleiche PID + Startzeit UND nicht Zombie: ein beendeter, nur noch nicht abgeholter Leader ist tot (gleiche Regel wie `laeuft`/`gruppeWeg`),
+ *  sonst meldet `beenden` „fertig“, während `lebt` bis zum Abholen durch den Elternprozess noch true sagt. */
+export const lebt = (p: { pid: number; start: string | null }) => p.pid > 1 && !!p.start && procStart(p.pid) === p.start && laeuft(p.pid);
 
 /** Eigenen Prozess samt Gruppe beenden: TERM, nach Frist KILL. Nur wenn PID und Startzeit passen. */
 export async function beendenProz(p: { pid: number; start: string | null }, frist = 6000): Promise<boolean> {
