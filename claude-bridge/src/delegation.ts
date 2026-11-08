@@ -2,7 +2,8 @@
 // Modell-Klassen und Prüferwahl (C6), Phasen-Modelle, Kappungszahlen (C8), Prüfbefehle der Brücke (C6), Unter-Worktree.
 // Der Ablauf (Worker starten, warten, Ergebnis) steht in sessions.ts (startDelegation), weil er den Zugablauf mitbenutzt.
 
-import { spawn } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
+import { starte, beenden } from './prozesse.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, symlinkSync, mkdirSync, statSync, readFileSync, appendFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -210,19 +211,27 @@ export function risikoMin(gegeben: unknown, strang: RisikoStufe): RisikoStufe {
 
 // ---------- Git und Prüfbefehle der Brücke (C6) ----------
 
-/** Befehl als Argument-Liste (keine Shell), eigene Prozessgruppe; beim Zeitlimit wird die ganze Gruppe beendet (Code 124). */
-export function run(cmd: string, args: string[], o: { cwd: string; env?: Record<string, string | undefined>; timeoutMs?: number; max?: number }): Promise<{ code: number; out: string }> {
+/** Befehl als Argument-Liste (keine Shell) über den Prozessstarter (R5): eigene Prozessgruppe, Eintrag im Register; Zeitlimit oder Abbruchsignal → beenden(id) beendet die ganze Gruppe (Code 124). */
+export function run(cmd: string, args: string[], o: { cwd: string; env?: Record<string, string | undefined>; timeoutMs?: number; max?: number; besitzer?: string; signal?: AbortSignal }): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     let out = '';
     let killed = false;
-    let p: ReturnType<typeof spawn>;
+    let fertig = false;
+    let timer: NodeJS.Timeout | undefined;
     const grenze = Math.max(o.max ?? 0, 4_000_000);   // Streaming-Deckel: großzügiger Aufrufer-max gewinnt, sonst 4 MB (Speicher-Bremse)
-    try { p = spawn(cmd, args, { cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e: any) { return resolve({ code: 127, out: String(e?.message ?? e) }); }
+    const resolveEinmal = (code: number, fehler?: string) => { if (fertig) return; fertig = true; clearTimeout(timer); o.signal?.removeEventListener('abort', brichAb); resolve({ code, out: fehler ?? (o.max ? out.slice(-o.max) : out) }); };
+    let id = '';
+    let kind: ChildProcess;
+    try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'run', cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv })); } catch (e: any) { return resolveEinmal(127, String(e?.message ?? e)); }
+    if (!kind.pid) return resolveEinmal(127, 'Start fehlgeschlagen');
     const add = (d: Buffer) => { out += d.toString('utf8'); if (out.length > grenze) out = out.slice(-grenze); };
-    p.stdout!.on('data', add); p.stderr!.on('data', add);
-    const timer = setTimeout(() => { killed = true; try { process.kill(-p.pid!, 'SIGKILL'); } catch { /* schon weg */ } }, o.timeoutMs ?? 30_000);
-    p.on('error', (e: any) => { clearTimeout(timer); resolve({ code: 127, out: String(e?.message ?? e) }); });
-    p.on('close', (code) => { clearTimeout(timer); resolve({ code: killed ? 124 : code ?? 1, out: o.max ? out.slice(-o.max) : out }); });
+    kind.stdout!.on('data', add); kind.stderr!.on('data', add);
+    const brichAb = () => { if (!fertig && id) void beenden(id); };
+    timer = setTimeout(() => { killed = true; brichAb(); }, o.timeoutMs ?? 30_000);
+    o.signal?.addEventListener('abort', brichAb, { once: true });
+    if (o.signal?.aborted) brichAb();
+    kind.on('error', (e: any) => resolveEinmal(127, String(e?.message ?? e)));
+    kind.on('close', (code) => resolveEinmal(killed ? 124 : code ?? 1));
   });
 }
 const git = (cwd: string, ...args: string[]) => run('git', ['-C', cwd, ...args], { cwd });
