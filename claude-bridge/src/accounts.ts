@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { log } from './log.ts';
 import { cleanEnv } from './mcpcall.ts';
+import { kontoFrei, resetNotieren } from './claudebudget.ts';
 import { applyHome, type ClaudeHome } from './claudehome.ts';
 
 export interface Account {
@@ -79,6 +80,7 @@ export function markExhausted(user: string, a: Account, resetsAt?: number) {
   const until = resetsAt && resetsAt > Date.now() ? resetsAt : Date.now() + DEFAULT_RESET_MS;
   const s = load();
   s[user] = { ...(s[user] ?? {}), [a.id]: { until, fp: fp(a.token) } };
+  resetNotieren(a.id, until);
   save();
 }
 
@@ -244,7 +246,7 @@ export const isMelious = (a?: Account | null) => a?.kind === 'melious';
 export function planQueue(accounts: Account[], ex: Exhausted, o: { conv: string; chatOn: boolean; overflow?: boolean; kette?: boolean; sonnetStufe?: boolean; ketteModell?: string; now?: number }): Account[] {
   const now = o.now ?? Date.now();
   const mel = accounts.find(isMelious);
-  const claude = accounts.filter((a) => !isMelious(a));
+  const claude = accounts.filter((a) => !isMelious(a) && kontoFrei(a.id));
   const queue = orderForTurn(pickAccounts(claude, ex, now), o.conv);
   const melOk = !!mel && meliousUsable(mel, ex, now);
   // Ersatzkette (Knut 15.10., Hauptchat und Strang-Leads, ohne Warte-Sperren): erst die Claude-Konten mit dem bestellten Modell
