@@ -737,7 +737,7 @@ Rollen mit (SDK-Option `agents`, `claude-bridge/src/agents.ts`):
 Knut, 07.10.2026: „werkbank hat nur einen chat pro zeit … gehen auch mehrere?“ → „nimm die beste Option“. Plan
 `docs/plan-parallele-chats.md` (P3-light).
 
-- **Bis zu 3 Chats je Person gleichzeitig** (`BRIDGE_MAX_PARALLEL_CHATS`, Vorgabe 3). Der vierte bekommt „Bei dir laufen
+- **Parallelgrenze (Beschluss 08.11.):** `BRIDGE_MAX_PARALLEL_CHATS` bleibt ungesetzt, also unbegrenzt; den Riegel setzt die Admission über `kapazitaet.ts` (Speicher/Konten), wer nicht passt, wartet in der Schlange. Gesetzt gilt der Wert als harte Obergrenze (Not-Aus unten). Früher (Vorgabe 3) bekam der vierte „Bei dir laufen
   schon 3 Chats gleichzeitig. Bitte warte, bis einer fertig ist.“ Chats, die auf „ja“ warten, und die lesenden
   Board-Agenten zählen nicht mit. Derselbe Chat zweimal bleibt gesperrt („arbeitet noch an der vorigen Nachricht“).
 - **Eigener Ordner je neuem Chat:** `.runtime/bridge/scratch/<person>/chats/<chat>` ist das Arbeitsverzeichnis (und im
