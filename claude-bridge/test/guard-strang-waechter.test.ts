@@ -109,7 +109,7 @@ before(async () => {
   });
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => { webPort = (web.address() as any).port; r(); }));
   proc = spawn(process.execPath, ['src/server.ts'], { env: {
-    PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', BRIDGE_MOCK: '0', BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', BRIDGE_MOCK: '0', BRIDGE_MELIOUS_NACHT: 'aus', BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
     WERKBANK_URL: `http://127.0.0.1:${webPort}`, WERKBANK_INTERNAL_TOKEN: 'geheim', BRIDGE_VAULT_DIR: VAULT,
     MELIOUS_BASE_URL: `http://127.0.0.1:${(stub.address() as any).port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost',

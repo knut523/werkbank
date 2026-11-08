@@ -53,7 +53,7 @@ before(async () => {
   });
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MELIOUS_NACHT: 'aus', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim',
       MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`,
       BRIDGE_CLAUDE_HOMES: HOMES, BRIDGE_MAX_PARALLEL_CHATS: '4', WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
@@ -361,7 +361,7 @@ test('Überlauf nach Risiko (S2): Strang „niedrig“ läuft über (Modell aus 
 test('Auto-Modus: Melious-Züge laufen wie Claude-Züge im Auto-Modus (Klassifikator über das Gateway, geprüft mit echtem Claude Code)', async () => {
   const AUTO = 3393;
   const p = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_PORT: String(AUTO), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-mel-auto-')), BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_MELIOUS_NACHT: 'aus', BRIDGE_PORT: String(AUTO), BRIDGE_STATE_DIR: mkdtempSync(join(tmpdir(), 'bridge-mel-auto-')), BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: `http://127.0.0.1:${(web.address() as any).port}`, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: `http://127.0.0.1:${(web.address() as any).port}`,
       BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_SKILLS_SOURCE: SKILLS, BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_EMAILS: 'knut@x' },
     stdio: 'ignore',
