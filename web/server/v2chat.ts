@@ -93,6 +93,13 @@ export async function meineChats(u: User, n = 30) {
   return l.map((c) => ({ conv: String(c._id), titel: String(c.titel ?? 'Chat'), at: c.updatedAt, vorlage: c.vorlage ?? null, modell: c.modell ?? '' }));
 }
 
+/** Gespeichertes Modell eines Chats, auch wenn er nicht unter den neuesten 30 der Liste ist (null = Chat unbekannt). */
+export async function chatModell(u: User, conv: string): Promise<string | null> {
+  if (!istV2Conv(conv)) return null;
+  const c: any = await chats().findOne({ _id: conv as any, userId: u.id });
+  return c ? String(c.modell ?? '') : null;
+}
+
 export async function verlauf(u: User, conv: string, seit?: string) {
   if (!istV2Conv(conv)) throw err(400, 'Unbekannter Chat.');
   if (!(await chats().findOne({ _id: conv as any, userId: u.id }))) throw err(404, 'Diesen Chat gibt es nicht.');
@@ -106,6 +113,7 @@ export async function verlauf(u: User, conv: string, seit?: string) {
 export async function senden(u: User, b: { text: unknown; conv?: unknown; vorlage?: { name: string; prefix: string } | null; modell?: unknown; anhaenge?: unknown }, d: ZugDeps): Promise<{ conv: string; frage: string; antwort: string }> {
   const text = pruefeText(b.text);
   const anh = pruefeAnhaenge(b.anhaenge);
+  // Vertrag: `modell` fehlt = gespeichertes Modell bleibt; vorhanden (auch '' = Vorgabe) = bewusste Wahl des Nutzers. Der Client sendet es nur nach einer Änderung bzw. bei der ersten Nachricht.
   const wunsch = b.modell === undefined || !modellwahlAn() ? undefined : pruefeModell(b.modell);
   const token = await d.token(u);
   if (!token) throw err(412, 'Für den Chat brauchst du einen Claude-Zugang — alles andere geht ohne. Frag Knut, wenn du einen brauchst.');
