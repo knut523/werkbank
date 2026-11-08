@@ -89,3 +89,9 @@ Jedes Pflaster dieses Baus mit Ursache und dauerhafter Lösung. Ein Pflaster ble
 ## Council 08.11. (glm-5.3, zweites Modell)
 
 VERDICT: HOLD (0,85 Ursachen / 0,5 Vollständigkeit 41 min). Bindende Bedingungen 1–6 eingearbeitet: 1 melious-budget ergänzt · 2 alle Port-Namen im DoD · 3 Ausschluss existiert nicht, P6z korrigiert · 4 Kausalkette oben · 5 kill in try/catch · 6 Worktree erst nach bestätigtem Abbruch entfernen.
+
+## Nachtrag 08.11. 22:00 — mel-sub: großer Auftrag als ein Argument
+
+- **Befund:** `mel-sub -p` reicht den ganzen Auftrag als **ein** Argument an `melious run` (`melious-plugin/plugins/melious/bin/mel-sub:39`). Linux begrenzt ein Einzelargument auf 128 KB. Pass C web (Prompt + 1680-Zeilen-Diff) scheiterte daran dreimal — zweimal fälschlich als „API nicht erreichbar“ gemeldet, einmal als `Argument list too long`.
+- **Dauerhafte Lösung (eigenes Item, melious-plugin):** Aufträge über ~100 KB schreibt mel-sub selbst in eine Datei und hängt sie per `-f` an; ein Startfehler des Aufrufs wird als solcher gemeldet, nie als Netzfehler. Test: 200-KB-Auftrag läuft durch.
+- **Bis dahin:** große Eingaben immer per `-f <datei>` übergeben (dokumentierter Weg, kein Workaround).
