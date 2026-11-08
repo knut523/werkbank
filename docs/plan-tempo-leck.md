@@ -41,7 +41,7 @@ Das Produkt hat das Signal bereits (`laeufer.ts`: OC2-Sitzung „ruhig“ → fe
 | P6w | Web: Helfer nach `web/test/port-hilfe.ts` + leitstand, api | 3 Dateien | Flash-Paar |
 | P6x | Web: orchestrator, cosics-route, r31-route (+ jira-mock, falls Port fest) | ≤ 3+1 Dateien | Flash-Paar |
 | P6z | Gate-Prüfschritt: neue/geänderte Tests ohne feste Ports oder Port-Fallbacks (`PORT = 1234`, `\|\| 1234`); Testdeckel 240 s neu messen und auf gemessenen Einzellauf × 2 setzen | abnahme.sh | Flash-Paar |
-| P7 | `shellPruefung`: `spawn(sh, -c, { detached: true })`, Timeout/Ende → `process.kill(-pid, 'SIGKILL')` | `bauerrennen.ts` + Test | Flash-Paar |
+| P7 | `shellPruefung` → `pruefLauf(cmd, args[], …)`: `spawn` **ohne Shell** mit Argumentliste, `detached: true`, Timeout/Ende → `process.kill(-pid, 'SIGKILL')`; `betroffeneTests` übergibt Dateinamen als Argumente (Pass C bridge #1: Shell-Injection über Dateinamen aus dem Bauer-Diff) | `bauerrennen.ts`, `bauerstrang.ts` + Test | Sonnet (Sicherheit, 2 Aufrufer) |
 | P8 | Abbruch durchreichen: `Deps.bauen(…, { signal })`, `mitDeckel` bricht bei Deckel ab, `bauerstrang` reicht an `o.zug` → `laeufer` `abbruch` → `interrupt` | `bauerrennen.ts`, `bauerstrang.ts`, `sessions.ts` + Tests | Sonnet (dateiübergreifend, nicht sauber schneidbar) |
 
 Reihenfolge: P1 zuerst (Helfer), P2–P7 parallel danach, P8 parallel zu allem.
@@ -50,7 +50,7 @@ Reihenfolge: P1 zuerst (Helfer), P2–P7 parallel danach, P8 parallel zu allem.
 
 - **P1–P6x:** In den umgestellten Dateien steht **keine** feste Portnummer mehr — alle Namen, nicht nur `PORT` (`OC2_PORT`, `OFF_PORT`, `AUTO_PORT`, `BRIDGE_PORT` …): `grep -E "[A-Z_]*PORT\s*=\s*[0-9]{4,5}|\|\| ?[0-9]{4,5}\)"` leer (Council-Bed. 2). Jede umgestellte Datei läuft **zweimal gleichzeitig** aus zwei Worktrees grün, und zwar so schnell wie ein Einzellauf (± 50 %). Vorher-Beleg: derselbe Doppellauf war rot (rc=124).
 - **P6z:** Ein Test mit `const PORT = 3999` lässt das Gate rot werden (Probe vorher rot/nachher grün). Web-`leitstand.test.ts` läuft im Gate mit, Einzellaufzeit gemessen und im Kommentar in `abnahme.sh` belegt (Council-Bed. 3: es gibt keinen Ausschluss in `abnahme.sh`; das Pflaster war der hochgesetzte Deckel mit Begründung „leitstand ~2 min“).
-- **P7:** `process.kill(-pid, …)` in try/catch (ESRCH/EPERM: Gruppe schon tot ist kein Fehler; Council-Bed. 5), eigener Test dafür. Test: ein Prüfbefehl, der einen Enkelprozess mit `sleep 600` startet, und ein Timeout von 2 s → nach Rückkehr existiert **kein** Prozess der Gruppe mehr (`kill -0` scheitert). Test war vor dem Fix rot.
+- **P7:** Eine Testdatei namens `x$(touch PWNED).test.ts` im Diff führt **nichts** aus (`PWNED` existiert danach nicht; vorher rot). `process.kill(-pid, …)` in try/catch (ESRCH/EPERM: Gruppe schon tot ist kein Fehler; Council-Bed. 5), eigener Test dafür. Test: ein Prüfbefehl, der einen Enkelprozess mit `sleep 600` startet, und ein Timeout von 2 s → nach Rückkehr existiert **kein** Prozess der Gruppe mehr (`kill -0` scheitert). Test war vor dem Fix rot.
 - **P8:** Test: `rennen` mit Deckel 50 ms und einem Bauer, der nie fertig wird → nach Rückkehr wurde sein Signal abgebrochen, `zug` hat `interrupt` gesehen (Fake-OC2). Unter-Worktree wird erst entfernt, nachdem der Abbruch bestätigt ist; der Fake-Bauer schreibt nach dem Entfernen nicht mehr hinein (Council-Bed. 6). Bestehende `bauerrennen`/`bauerstrang`-Tests grün. Test war vor dem Fix rot.
 - **Alle:** `tsc` Bridge 0 Fehler, Web nicht über 56 (Ausgangswert); `abnahme.sh` grün; Gegenprüfer-Schleife konvergiert.
 
