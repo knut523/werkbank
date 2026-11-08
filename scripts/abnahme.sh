@@ -17,7 +17,7 @@ BASE=${1:?usage: abnahme.sh <base> [<head>]}; HEAD_REF=${2:-HEAD}
 ROOT=$(git rev-parse --show-toplevel) || exit 2; cd "$ROOT"
 HERE=$ROOT/scripts; RT=$ROOT/.runtime
 [ "$(git rev-parse "$HEAD_REF")" = "$(git rev-parse HEAD)" ] || { echo "abnahme: <head> must be checked out (tests and tsc run on the working tree)"; exit 2; }
-TMO=${ABNAHME_TEST_TIMEOUT_S:-150}
+TMO=${ABNAHME_TEST_TIMEOUT_S:-240}   # leitstand.test.ts alone takes ~2 min
 ROT=0; WARN=0
 rot()  { echo "  RED   $*"; ROT=1; }
 warn() { echo "  WARN  $*"; WARN=1; }
@@ -65,6 +65,9 @@ else
   for v in $(grep -rhoE 'WERKBANK_TEST_[A-Z_]*PORT' "$ROOT"/web/test "$ROOT"/web/app/test "$ROOT"/claude-bridge/test 2>/dev/null | sort -u); do
     pp=$(frei $nx); PORTENV="$PORTENV $v=$pp"; nx=$(( pp + 1 ))
   done
+  if printf '%s\n' "${!TESTS[@]}" | grep -q '^web/' && [ ! -x "$RT/bin/mongod" ]; then
+    rot "web tests affected, but no test mongo ($RT/bin/mongod missing) — check .runtime link"
+  fi
   if printf '%s\n' "${!TESTS[@]}" | grep -q '^web/' && [ -x "$RT/bin/mongod" ]; then
     TM=$(mktemp -d); "$RT/bin/mongod" --dbpath "$TM" --bind_ip 127.0.0.1 --port "$TP" --quiet --wiredTigerCacheSizeGB 0.25 > "$TM.log" 2>&1 & MP=$!
     for _ in $(seq 1 60); do (echo > "/dev/tcp/127.0.0.1/$TP") 2>/dev/null && break; sleep 0.5; done
