@@ -4,10 +4,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
+import { bestofnAn, inSchutzzone, inSonnetzone, bauerFuer, rennen, nachAblehnung, abgeschaltet, statistikLaden, statistikSpeichern, emittiereLauf, SONNET, pruefSemaphor, pruefLauf, type Lauf, type Schnell, type Deps, type Statistik } from './bauerrennen.ts';
 import { budgetGrund } from './kapazitaet.ts';
 import { subWorktree, removeWorktree, run } from './delegation.ts';
-import { GLM } from './modellwahl.ts';
 
 type Env = Record<string, string | undefined>;
 export interface StrangRennen {
@@ -116,7 +115,7 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   return { ok: true, text: texte.get(sieger!.bauer) ?? '', grund: '', modell: `${sieger!.bauer} (Best-of-N)` };
 }
 
-/** Review hat den Sieger abgelehnt: Verlierer-Diff (24 h) anwenden → { art: 'verlierer' }; nach 2 Fixrunden → { art: 'eskalation' } (glm-5.3 mit allen Logs); sonst null (normaler Fix). */
+/** Review hat den Sieger abgelehnt: Verlierer-Diff (24 h) anwenden → { art: 'verlierer' }; nach 2 Fixrunden → { art: 'eskalation' } (Sonnet mit allen Logs, nie glm-5.3); sonst null (normaler Fix). */
 export async function bestofnAblehnung(id: string, grund: string, jetzt = Date.now()): Promise<{ art: 'verlierer'; bauer: string } | { art: 'eskalation'; modell: string; fehlerlogs: string[] } | null> {
   const g = geschlossen.get(id);
   if (!g) return null;
@@ -126,5 +125,5 @@ export async function bestofnAblehnung(id: string, grund: string, jetzt = Date.n
     await anwenden(g.cwd, g.patch);   // zurück auf den Sieger, falls der Tausch halb ging
     return null;
   }
-  return f.art === 'eskalation' ? { art: 'eskalation', modell: GLM, fehlerlogs: f.fehlerlogs } : null;
+  return f.art === 'sonnet' ? { art: 'eskalation', modell: SONNET, fehlerlogs: f.fehlerlogs } : null;
 }
