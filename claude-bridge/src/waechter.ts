@@ -10,6 +10,9 @@ export type WaechterZustand = Map<string, Stand>;
 const min = (ms: number) => Math.max(0, Math.round(ms / 60_000));
 const sek = (name: string, def: number) => { const n = Number(process.env[name]); return (Number.isFinite(n) && n > 0 ? n : def) * 1000; };
 
+/** Gnadenfrist nach der Frist in ms (BRIDGE_WAECHTER_GNADE_S, Standard 60 s) — gilt für den Wächter und für die Anzeige. */
+export const gnadeMs = () => sek('BRIDGE_WAECHTER_GNADE_S', 60);
+
 /** Rein: entscheidet je Eintrag, was zu tun ist, und führt den Zustand (schon gemeldet) nach. */
 export function waechterSchritt(eintraege: Pick<Eintrag, 'id' | 'besitzer' | 'fristAt' | 'zuletztAktiv'>[], jetzt: number, cfg: WaechterCfg, zustand: WaechterZustand): WaechterAktion[] {
   const aus: WaechterAktion[] = [];
@@ -48,7 +51,7 @@ export interface WaechterOpt {
 /** Startet den Wächter; Rückgabe: Stopp-Funktion. */
 export function starteWaechter(o: WaechterOpt): () => void {
   const takt = o.takt ?? sek('BRIDGE_WAECHTER_TAKT_S', 60);
-  const cfg: WaechterCfg = { gnadeMs: o.gnadeMs ?? sek('BRIDGE_WAECHTER_GNADE_S', 60), leerlaufMs: o.leerlaufMs ?? sek('BRIDGE_WAECHTER_LEERLAUF_S', 600) };
+  const cfg: WaechterCfg = { gnadeMs: o.gnadeMs ?? gnadeMs(), leerlaufMs: o.leerlaufMs ?? sek('BRIDGE_WAECHTER_LEERLAUF_S', 600) };
   const jetzt = o.jetzt ?? Date.now;
   const tick = () => {
     for (const a of waechterSchritt(liste(), jetzt(), cfg, zustandGlobal)) {

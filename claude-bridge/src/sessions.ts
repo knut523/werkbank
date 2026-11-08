@@ -24,7 +24,8 @@ import { KAPPUNG, PHASEN, ROLLEN, ABSCHLUSS_PFLICHT, parseAbschluss, checkUeberg
 import type { PathGuard } from './tools.ts';
 import { log } from './log.ts';
 import { starte, beenden, liste, type Eintrag } from './prozesse.ts';
-import { waechterZustand } from './waechter.ts';
+import { waechterZustand, gnadeMs } from './waechter.ts';
+import { safeId } from './safeid.ts';
 import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
@@ -650,6 +651,8 @@ export interface ProzessSicht {
   besitzer: string; art: string; cmd: string;
   laufzeitS: number; zuletztAktivS: number; fristAt: number | null;
   zustand: 'läuft' | 'checkin' | 'überfällig';
+  /** Nur bei `überfällig` mit Frist: ISO-Zeitpunkt, zu dem der Wächter den Prozess beendet (Frist + Gnadenfrist des Wächters). */
+  beendetAt: string | null;
 }
 /** Gehört der Eintrag zu diesem Strang? Genau der Schlüssel oder ein Untereintrag `<schlüssel>#…`. */
 const meinProzess = (besitzer: string, key: string) => besitzer === key || besitzer.startsWith(`${key}#`);
@@ -663,6 +666,7 @@ export function prozessSicht(
   zustaende: Pick<ReturnType<typeof waechterZustand>[number], 'id' | 'zustand'>[],
   jetzt: number,
   besitzer?: string,
+  gnade: number = gnadeMs(),
 ): ProzessSicht[] {
   const zustandVon = new Map(zustaende.map((z) => [z.id, z.zustand]));
   const sek = (ms: number) => Math.max(0, Math.floor(ms / 1000));
@@ -670,6 +674,7 @@ export function prozessSicht(
     besitzer: e.besitzer, art: e.art, cmd: e.cmd.slice(0, 120),
     laufzeitS: sek(jetzt - e.startedAt), zuletztAktivS: sek(jetzt - e.zuletztAktiv),
     fristAt: e.fristAt ?? null, zustand: zustandVon.get(e.id) ?? 'läuft',
+    beendetAt: e.fristAt != null && zustandVon.get(e.id) === 'überfällig' ? new Date(e.fristAt + gnade).toISOString() : null,
   }));
 }
 
@@ -748,9 +753,7 @@ const MEL_SUB_HINT = `Verteilung Claude ↔ Melious: Lesen, Suchen im Code, Rech
 /** R31 (WERKBANK_ZUARBEIT=claude oder auto bei knappem Melious): die Zuarbeit bleibt auf Claude. */
 export const MEL_SUB_HINT_CLAUDE = `Verteilung Claude ↔ Melious: Melious ist gerade knapp oder für die Zuarbeit abgeschaltet (WERKBANK_ZUARBEIT). Lesen, Suchen und Recherche gibst du an lesende Claude-Teilagenten (leser, Explore) ab, gebündelt und sparsam; melious_sub und challenge nur, wenn es ausdrücklich verlangt ist. Kontingent und Wahl zeigt das Werkzeug auslastung.`;
 
-export function safeId(s: string): string {
-  return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : createHash('sha256').update(s).digest('hex').slice(0, 24);
-}
+export { safeId };
 
 /** Kennung einer Unterhaltung: Buchung beim Zug-Start (hier) und Abrechnung gegen den Ist-Verbrauch (server.ts, onMeliousUsage) müssen dieselbe benutzen. */
 export const sitzungsKey = (userId: string, convId: string): string => `${safeId(userId)}:${safeId(convId)}`;

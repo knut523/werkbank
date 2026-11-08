@@ -59,6 +59,17 @@ test('prozessSicht: eigener Strang (genau und `#`-Unterstränge), Zeiten in ganz
   }
 });
 
+test('prozessSicht: beendetAt = Frist + Gnadenfrist des Wächters, nur bei überfälligem Eintrag mit Frist', () => {
+  const jetzt = 1_800_000_000_000, key = 'u1:s';
+  const e = (id: string, fristAt: number | null) => ({ id, besitzer: key, art: 'bash', cmd: 'x', startedAt: jetzt - 1000, zuletztAktiv: jetzt, fristAt });
+  const zust = [{ id: 'a', zustand: 'überfällig' as const }, { id: 'b', zustand: 'läuft' as const }, { id: 'c', zustand: 'überfällig' as const }];
+  const [a, b, c] = mod.prozessSicht([e('a', jetzt - 4_000), e('b', jetzt + 9_000), e('c', null)], zust, jetzt, key, 60_000) as any[];
+  assert.equal(a.beendetAt, new Date(jetzt - 4_000 + 60_000).toISOString());
+  assert.equal(b.beendetAt, null, 'läuft: kein Beenden angekündigt');
+  assert.equal(c.beendetAt, null, 'ohne Frist nichts zu beenden');
+  assert.equal(mod.prozessSicht([e('a', jetzt - 4_000)], zust, jetzt, key)[0].beendetAt, new Date(jetzt - 4_000 + 60_000).toISOString(), 'Standard = Gnadenfrist des Wächters (60 s)');
+});
+
 // ---------- Strang-Zustand ----------
 
 test('orchStateOf: processes je Strang — die beiden eigenen sichtbar, fremder Strang fehlt, kein env', async () => {
@@ -149,4 +160,11 @@ test('GET /internal/orch-state: processes je Strang auch über die Route', async
   const j = await r.json();
   assert.ok(Array.isArray(j.strands));
   for (const s of j.strands as any[]) assert.ok(Array.isArray(s.processes), 'processes je Strang');
+});
+
+test('safeId: eine Quelle (safeid.ts), von sessions.ts weitergereicht; unsaubere Ids werden zu 24 Hex', async () => {
+  const q = await import('../src/safeid.ts');
+  assert.equal(mod.safeId, q.safeId);
+  assert.equal(q.safeId('ok_id-1'), 'ok_id-1');
+  assert.match(q.safeId('a@b.at'), /^[0-9a-f]{24}$/);
 });

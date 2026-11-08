@@ -1,5 +1,6 @@
 // Werkbank 2.0 (Paket 436): reine Regeln der neuen Oberfläche — welche fünf Dinge oben stehen, wie eine Karte aussieht,
 // der Zustand eines Unter-Chats in einem Satz, „Heute erledigt“ nur mit Fertigem, „wartet auf“ je Person. Ohne Datenbank.
+import { safeId } from '../../claude-bridge/src/safeid.ts';
 import { fangHierAn, type Frage } from './entscheidungsseite.ts';
 import { ohneFachwort } from './woerterbuch.ts';
 import { THEMEN, themaOf } from './themen.ts';
@@ -483,4 +484,27 @@ export function strangZuPr(straenge: { _id: string; title?: string; zustand?: st
     || (s.berichtKopf?.github ?? []).some((g) => imText.test(String(g?.pr ?? '')) || imText.test(String(g?.url ?? '')) || (repoKurz(g?.repo) === repoKurz(repo) && new RegExp(`#${number}(?!\\d)`).test(String(g?.pr ?? ''))))
     || imTitel.test(String(s.title ?? '')) || imText.test(String(s.title ?? '')) || imText.test(String(s.prompt ?? '')))
     .map((s) => ({ id: String(s._id), titel: kurz(String(s.title ?? ''), 120), zustand: zu(s.zustand) }));
+}
+
+/** R12b: Schlüssel eines Strangs in der Brücke — dieselbe `safeId` wie dort (claude-bridge/src/safeid.ts). */
+export const bruckenSchluessel = (userId: string, conv: string) => `${safeId(userId)}:${conv}`;
+
+export interface ProzessZeile { anzahl: number; laengsterMin: number; frist: string | null; ueberfaellig: { beendetInS: number } | null; checkin: string | null }
+/**
+ * R12b: die laufenden Prozesse EINES Strangs in einer Zeile. `eintraege` ist die Antwort der Brücke (`/internal/prozesse`);
+ * zum Strang gehört `besitzer === schluessel` oder `<schluessel>#…` (nie nur ein gleicher Anfang: `abc2` ≠ `abc`). Keine → null.
+ */
+export function prozessZeile(eintraege: any[], schluessel: string, jetzt: number): ProzessZeile | null {
+  const meine = (Array.isArray(eintraege) ? eintraege : []).filter((x) => typeof x?.besitzer === 'string' && (x.besitzer === schluessel || x.besitzer.startsWith(`${schluessel}#`)));
+  if (!meine.length) return null;
+  const fristen = meine.map((x) => Number(x.fristAt)).filter((n) => Number.isFinite(n) && n > 0);
+  const enden = meine.filter((x) => x.zustand === 'überfällig' && typeof x.beendetAt === 'string' && Number.isFinite(Date.parse(x.beendetAt))).map((x) => Date.parse(x.beendetAt));
+  const still = meine.find((x) => x.zustand === 'checkin');
+  return {
+    anzahl: meine.length,
+    laengsterMin: Math.round(Math.max(...meine.map((x) => Number(x.laufzeitS) || 0)) / 60),
+    frist: fristen.length ? new Date(Math.min(...fristen)).toISOString() : null,
+    ueberfaellig: enden.length ? { beendetInS: Math.max(0, Math.round((Math.min(...enden) - jetzt) / 1000)) } : null,
+    checkin: still ? `still seit ${Math.round((Number(still.zuletztAktivS) || 0) / 60)} min` : null,
+  };
 }

@@ -626,3 +626,36 @@ test('Hauptchat beschäftigt: zwei Aufträge gleichzeitig werden beide eingereih
     assert.deepEqual([...rein].sort(), ['erster', 'zweiter']);
   } finally { deps.hauptchat = alt.hauptchat; deps.laeuftChat = alt.laeuftChat; delete deps.hauptchatEinreihen; delete deps.hauptchatEingereiht; }
 });
+
+test('R12b: Prozesszeile im Steckbrief — Brücke liefert: nur die Prozesse dieses Strangs; Brücke kaputt: prozesse null, Seite lädt trotzdem', async () => {
+  const { createServer } = await import('node:http');
+  const jetzt = Date.now();
+  const e = (besitzer: string, o: any = {}) => ({ besitzer, art: 'bash', cmd: 'npm test', laufzeitS: 840, zuletztAktivS: 1, fristAt: null, zustand: 'läuft', beendetAt: null, ...o });
+  let modus: 'ok' | 'kaputt' = 'ok'; let anfrage = '';
+  const srv = createServer((q, r) => {
+    anfrage = String(q.url);
+    if (modus === 'kaputt') { r.statusCode = 500; return r.end('{}'); }
+    r.setHeader('content-type', 'application/json');
+    r.end(JSON.stringify([e('k:c1'), e('k:c1#endpruefung', { zustand: 'überfällig', fristAt: jetzt - 4000, beendetAt: new Date(jetzt + 56_000).toISOString() }), e('k:c12'), e('x:c1')]));
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => srv.once('listening', r));
+  const altStrang = deps.strang, altUrl = deps.bridgeUrl;
+  deps.bridgeUrl = `http://127.0.0.1:${(srv.address() as any).port}`;
+  deps.strang = async (u: any, id: string) => (u.id === 'k' && id === 'abcd1234' ? { _id: id, conv: 'c1', title: 'Rechner', prompt: '# Auftrag\nBaue etwas Ordentliches für den Rechner.', lastExcerpt: '', paket: null } : null);
+  try {
+    const r = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
+    assert.equal(r.status, 200);
+    assert.match(anfrage, /^\/internal\/prozesse\?user=k$/);
+    assert.equal(r.b.steckbrief.prozesse.anzahl, 2, 'c1 und c1#endpruefung; c12 und fremder Nutzer nicht');
+    assert.equal(r.b.steckbrief.prozesse.laengsterMin, 14);
+    assert.ok(r.b.steckbrief.prozesse.ueberfaellig.beendetInS >= 54 && r.b.steckbrief.prozesse.ueberfaellig.beendetInS <= 56);
+    modus = 'kaputt';
+    const k = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
+    assert.equal(k.status, 200, 'Seite lädt trotzdem');
+    assert.equal(k.b.steckbrief.prozesse, null);
+    assert.equal(k.b.steckbrief.wofuer, 'Baue etwas Ordentliches für den Rechner.');
+    srv.close(); await new Promise((r) => setTimeout(r, 50));
+    const weg = await rufe('GET', '/api/v2/arbeit/abcd1234', ADMIN);
+    assert.equal(weg.status, 200); assert.equal(weg.b.steckbrief.prozesse, null, 'Brücke nicht erreichbar');
+  } finally { deps.strang = altStrang; deps.bridgeUrl = altUrl; srv.close(); }
+});
