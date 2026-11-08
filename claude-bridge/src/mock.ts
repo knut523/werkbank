@@ -80,9 +80,9 @@ function mockStreamed(prompt: AsyncIterable<any>, options: Record<string, any>) 
   return run();
 }
 
-export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<any>; options: Record<string, any> }): any {
-  if (typeof prompt !== 'string' && options.extraArgs && 'replay-user-messages' in options.extraArgs) return mockStreamed(prompt, options);
-  if (typeof prompt !== 'string') {
+export function mockQuery({ prompt: eingabe, options }: { prompt: string | AsyncIterable<any>; options: Record<string, any> }): any {
+  if (typeof eingabe !== 'string' && options.extraArgs && 'replay-user-messages' in options.extraArgs) return mockStreamed(eingabe, options);
+  if (typeof eingabe !== 'string') {
     // Streaming-Eingabe ohne Nachricht (MCP-Status): nur Steuerabfragen, keine Modellantwort.
     const signal: AbortSignal = options.abortController?.signal;
     return {
@@ -90,6 +90,8 @@ export function mockQuery({ prompt, options }: { prompt: string | AsyncIterable<
       mcpServerStatus: async () => mcpList(options),
     } as any;
   }
+  // Paket G (Anhänge) lässt auch einen Datenstrom als Prompt zu; ab hier ist es Text — die beiden Fälle oben sind erledigt.
+  const prompt: string = eingabe;
   const session_id: string = options.resume ?? randomUUID();
   const signal: AbortSignal = options.abortController?.signal;
   const guard = options.hooks?.PreToolUse?.[0]?.hooks?.[0];

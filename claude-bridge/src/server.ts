@@ -134,6 +134,10 @@ function textOf(content: unknown): string {
   return '';
 }
 
+// claude-bridge/tsconfig.json fährt strictNullChecks aus. Darum grenzt `r.ok` eine Ergebnis-Union
+// ({ ok: true, … } | { ok: false, … }) nicht ein — die Fehlerfelder hier typseitig holen, ohne Laufzeitänderung.
+const fehlerKoerper = (r: unknown) => { const f = r as { status: number; error: string }; return { error: f.error, status: f.status }; };
+
 function readBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -455,7 +459,8 @@ const server = createServer(async (req, res) => {
       const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[0-9a-f-]{36}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
       const r = injectMessage(userId, conv, String(b.text ?? ''));
-      return r.ok ? json(res, 200, { id: r.id, state: 'zugestellt' }) : json(res, r.status, { error: r.error });
+      const f = fehlerKoerper(r);
+      return r.ok ? json(res, 200, { id: r.id, state: 'zugestellt' }) : json(res, f.status, { error: f.error });
     }
     const inj = req.method === 'GET' ? url.pathname.match(/^\/internal\/inject\/([0-9a-f-]{36})$/) : null;
     if (inj) {
@@ -472,9 +477,10 @@ const server = createServer(async (req, res) => {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
       // Knut 19.10.: melious_sub und auslastung auch für den Lead (native Verteilung Claude ↔ Melious).
       const fn = { delegate: startDelegation, 'delegate-stand': delegationStand, 'delegate-urteil': delegationUrteil, phase: phaseWechseln, 'mel-sub': melSub, ensemble: ensembleReview, auslastung: (u: string, c: string) => auslastungFuer(u, c) }[deleg[1] as 'delegate'];
-      if (deleg[1] === 'mel-sub' || deleg[1] === 'ensemble') return langeAntwort(res, async () => { const r = await fn(userId, conv, b); return r.ok ? r : { error: r.error, status: r.status }; });
+      if (deleg[1] === 'mel-sub' || deleg[1] === 'ensemble') return langeAntwort(res, async () => { const r = await fn(userId, conv, b); return r.ok ? r : fehlerKoerper(r); });
       const r = await fn(userId, conv, b);
-      return r.ok ? json(res, 200, r) : json(res, r.status, { error: r.error });
+      const f = fehlerKoerper(r);
+      return r.ok ? json(res, 200, r) : json(res, f.status, { error: f.error });
     }
     // Knut 06.11. (D2): Gegenprüfung der Werkbank über dasselbe Ensemble — die Brücke holt das Melious-Konto der Person selbst.
     if (req.method === 'POST' && url.pathname === '/internal/ensemble-web') {
@@ -482,7 +488,7 @@ const server = createServer(async (req, res) => {
       const b = await readBody(req);
       const userId = String(b.userId ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) return json(res, 400, { error: 'Ungültige Person.' });
-      return langeAntwort(res, async (weg) => { const r = await ensembleFuerWeb(await claudeAccounts(userId), userId, b, weg); return r.ok ? r : { error: r.error, status: r.status, nutzung: r.nutzung ?? [] }; });
+      return langeAntwort(res, async (weg) => { const r = await ensembleFuerWeb(await claudeAccounts(userId), userId, b, weg); return r.ok ? r : { ...fehlerKoerper(r), nutzung: r.nutzung ?? [] }; });
     }
     if (req.method === 'GET' && url.pathname === '/internal/orch-state') {
       if (!internalOk(req)) return json(res, 403, { error: 'Nicht erlaubt' });
@@ -515,7 +521,7 @@ const server = createServer(async (req, res) => {
       const b = await readBody(req);
       const userId = String(b.userId ?? ''), conv = String(b.conv ?? '');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId) || !/^[A-Za-z0-9_-]{1,64}$/.test(conv)) return json(res, 400, { error: 'Ungültige Person oder Unterhaltung.' });
-      return langeAntwort(res, async () => { const r = await strangPruefen(userId, conv); return r.ok ? r : { error: r.error, status: r.status }; });
+      return langeAntwort(res, async () => { const r = await strangPruefen(userId, conv); return r.ok ? r : fehlerKoerper(r); });
     }
     // Release 2.0 (B3): Claude-Auslastung (cswap, 5 h / Woche) für die Warnungen in 2.0 — ohne Unterhaltung, nur Zahlen.
     if (req.method === 'GET' && url.pathname === '/internal/auslastung-stand') {

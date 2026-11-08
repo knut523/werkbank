@@ -47,7 +47,7 @@ export const OC2_BIN = join(process.env.BRIDGE_OPENCODE2_HOME || join(homedir(),
 export const oc2Da = () => existsSync(OC2_BIN);
 
 /** Ein echter opencode-2-Server mit eigener Konfiguration: Provider „melious“ zeigt auf das Schein-Modell. */
-export async function oc2MitMock(o: { tmp: string; mockPort: number; port?: number; passwort: string; pathVorn?: string; konfig?: Record<string, unknown> }): Promise<{ proc: ChildProcess; base: string; stop: () => void; env: Record<string, string> }> {
+export async function oc2MitMock(o: { tmp: string; mockPort: number; port?: number; passwort: string; pathVorn?: string; konfig?: Record<string, unknown>; envExtra?: Record<string, string> }): Promise<{ proc: ChildProcess; base: string; stop: () => void; env: Record<string, string> }> {
   const x = join(o.tmp, 'xdg');
   mkdirSync(join(x, 'config', 'opencode'), { recursive: true });
   writeFileSync(join(x, 'config', 'opencode', 'opencode.jsonc'), JSON.stringify({

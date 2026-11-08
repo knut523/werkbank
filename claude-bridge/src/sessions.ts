@@ -45,6 +45,10 @@ import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAc
 import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
 import { auslastung as claudeAuslastung } from './auslastung.ts';
 
+// claude-bridge/tsconfig.json fährt strictNullChecks aus. Darum grenzt `p.ok` eine Ergebnis-Union
+// ({ ok: true, … } | { ok: false, why }) nicht ein — den Grund hier typseitig holen, ohne Laufzeitänderung.
+const warum = (r: unknown) => (r as { why?: string }).why ?? '';
+
 export interface Sink {
   write(text: string): void;
   /** Denken (Zusammenfassung) als eigener Kanal — im Stream `delta.reasoning_content`, LibreChat zeigt es als „Gedanken“. */
@@ -2153,7 +2157,7 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
     }
   })();
 
-  async function attempt(p: string): Promise<string[] | void> {
+  async function attempt(p: string): Promise<string[] | undefined> {
     // Je Versuch ein neuer Posteingang; ungelesene Nachrichten eines Versuchs mit Kontingent kommen mit (Bedingung 1).
     const inbox = !nachreichenOn() ? null : live.inbox?.open && !live.carry?.length ? live.inbox : newInbox(live.carry ?? []);
     live.carry = [];
@@ -2797,7 +2801,7 @@ export async function opencode2Fuer(key: string | undefined, env: Record<string,
   const ports = oc2Ports(env);
   if (!opencode2An(env) || !key || !ports.length) return null;
   const s = `${oc2Home(env)}|${ports.join(',')}|${oc2Version(env)}`;
-  if (oc2Srv?.schluessel !== s) { oc2Srv?.srv.stop(); oc2Srv = { schluessel: s, srv: opencode2Server({ home: oc2Home(env), ports, version: oc2Version(env), log: (m, d) => log(m, d ?? {}) }) }; }
+  if (oc2Srv?.schluessel !== s) { oc2Srv?.srv.stop(); oc2Srv = { schluessel: s, srv: opencode2Server({ home: oc2Home(env), ports, version: oc2Version(env), log: (m, d) => log(m, (d ?? {}) as Record<string, unknown>) }) }; }
   let z: Awaited<ReturnType<Oc2Server['sichern']>> = null;
   try { z = await oc2Srv.srv.sichern(key); } catch (e: any) { log('opencode2 nicht verfügbar', { fehler: String(e?.message ?? e).slice(0, 200) }); return null; }
   if (!z) return null;
@@ -3088,11 +3092,11 @@ async function delegationLauf(d: Deleg): Promise<void> {
     // Reparaturrunde (Council 165, 7): einmal nachfordern, in derselben Sitzung.
     if (!p.ok && !d.aborted && sessionMap[d.workerKey]) {
       d.reparatur = true;
-      text += '\n\n' + await runWorker(d, `Dein Abschluss-Block fehlt oder ist ungültig (${p.why}). Gib jetzt NUR den Abschluss-Block aus — als letzten \`json\`-Codeblock, sonst nichts.\n\n${ABSCHLUSS_PFLICHT(d.rolle)}`);
+      text += '\n\n' + await runWorker(d, `Dein Abschluss-Block fehlt oder ist ungültig (${warum(p)}). Gib jetzt NUR den Abschluss-Block aus — als letzten \`json\`-Codeblock, sonst nichts.\n\n${ABSCHLUSS_PFLICHT(d.rolle)}`);
       p = parseAbschluss(text, d.rolle);
     }
     d.text = text;
-    if (p.ok) { d.abschluss = p.a; d.span = p.span; } else d.abschlussFehler = p.why;
+    if (p.ok) { d.abschluss = p.a; d.span = p.span; } else d.abschlussFehler = warum(p);
     if (d.wt && !d.aborted) {
       d.git = await gitStand(d.wt.dir, d.wt.base);
       // Prüfbefehle aus dem beim Anlegen festgehaltenen Integrations-Commit (Pass B, 2: der Worker kann ihn nicht umbiegen).
@@ -3358,7 +3362,7 @@ export async function phaseWechseln(userId: string, convId: string, b: { phase?:
   if (runningOf(key).length) return { ok: false, status: 409, error: `Noch ${runningOf(key).length} Worker laufen — erst delegation_stand abwarten und Ergebnisse in die Übergabe schreiben, dann wechseln.` };
   let text = readFileSync(file, 'utf8');
   const c = checkUebergabe(text);
-  if (!c.ok) return { ok: false, status: 400, error: `Übergabe ungültig (C1): ${c.why}. Kein Wechsel — Datei ergänzen und noch einmal.` };
+  if (!c.ok) return { ok: false, status: 400, error: `Übergabe ungültig (C1): ${warum(c)}. Kein Wechsel — Datei ergänzen und noch einmal.` };
   const { modell, c2 } = phaseModell(phase, c.ziel);
   // C6 für Ersatz-Leads (Council 165, 8): lief ein Zug dieser Phase auf einem Glied der Ersatzkette, prüft die Brücke den Stand.
   const ersatz = (e.phaseModelle ?? []).filter((m) => m.endsWith(' (Kette)'));
