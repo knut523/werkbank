@@ -1602,6 +1602,14 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   let fruehKonten: Promise<any[] | null> | null = null;
   let melBuchbar = false;   // Melious für die Person nutzbar: nur dann gibt es etwas vorab zu buchen (ohne Konto verbraucht der Zug keine Melious-Energie)
   if (req.accounts) { fruehKonten = req.accounts().catch(() => null); await fruehKonten.then((l) => { if (l) { const mel = normalizeAccounts(l, req.token).find(isMelious); melBuchbar = !!mel && meliousUsable(mel, exhaustedOf(safeId(req.userId)), Date.now()); setzeMelious(req.userId, melBuchbar); } }); }
+  // Die Prüfung oben lag vor den Awaits (Kapazität, Kontenliste): eine zweite Nachricht derselben Unterhaltung hat in der Zwischenzeit
+  // einen Zug angemeldet. Hier erneut prüfen (wie in der Schlange unten) und die Zählung der eigenen Züge neu lesen.
+  if (lives.has(key)) {
+    req.sink.write('Diese Unterhaltung arbeitet noch an der vorigen Nachricht. Bitte kurz warten.');
+    req.sink.finish();
+    return;
+  }
+  mine = meine();
   const kapGrund = () => (kind === 'strand' && kapLaden ? kapazitaetGrund(kapazitaetJetzt(req.userId, () => kapLaden()), kapOpt) : '');
   const zulassen = (r: ReturnType<typeof lockFor>): ReturnType<typeof lockFor> => {
     if (r !== 'ok') { if (lockGrund && !lockGrund.startsWith('wartet:') && /Box|Host|Topf/.test(lockGrund)) lockGrund = `wartet: RAM — ${lockGrund}`; return r; }
