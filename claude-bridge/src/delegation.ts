@@ -222,16 +222,18 @@ export function run(cmd: string, args: string[], o: { cwd: string; env?: Record<
     const resolveEinmal = (code: number, fehler?: string) => { if (fertig) return; fertig = true; clearTimeout(timer); o.signal?.removeEventListener('abort', brichAb); resolve({ code, out: fehler ?? (o.max ? out.slice(-o.max) : out) }); };
     let id = '';
     let kind: ChildProcess;
-    try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'run', cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv })); } catch (e: any) { return resolveEinmal(127, String(e?.message ?? e)); }
-    if (!kind.pid) return resolveEinmal(127, 'Start fehlgeschlagen');
+    try { ({ id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'run', fristMs: o.timeoutMs ?? 30_000, cwd: o.cwd, env: (o.env ?? process.env) as NodeJS.ProcessEnv })); } catch (e: any) { return resolveEinmal(127, String(e?.message ?? e)); }
     const add = (d: Buffer) => { out += d.toString('utf8'); if (out.length > grenze) out = out.slice(-grenze); };
-    kind.stdout!.on('data', add); kind.stderr!.on('data', add);
-    const brichAb = () => { if (!fertig && id) void beenden(id); };
+    kind.stdout?.on('data', add); kind.stderr?.on('data', add);
+    let abgebrochen = false;
+    const brichAb = () => { abgebrochen = true; if (!fertig && id) void beenden(id); };
     timer = setTimeout(() => { killed = true; brichAb(); }, o.timeoutMs ?? 30_000);
     o.signal?.addEventListener('abort', brichAb, { once: true });
     if (o.signal?.aborted) brichAb();
+    // 'error' (z. B. ENOENT) zuerst anhängen: ein Startfehler kommt asynchron und darf nie unbehandelt bleiben.
     kind.on('error', (e: any) => resolveEinmal(127, String(e?.message ?? e)));
-    kind.on('close', (code) => resolveEinmal(killed ? 124 : code ?? 1));
+    kind.on('close', (code) => resolveEinmal(killed || abgebrochen ? 124 : code ?? 1));
+    if (!kind.pid) resolveEinmal(127, 'Start fehlgeschlagen'); // Rückfallebene; der eigentliche Grund folgt als 'error'-Ereignis
   });
 }
 const git = (cwd: string, ...args: string[]) => run('git', ['-C', cwd, ...args], { cwd });

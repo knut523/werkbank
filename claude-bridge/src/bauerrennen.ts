@@ -138,10 +138,11 @@ export const groupKill = (pid: number) => { try { process.kill(-pid, 'SIGKILL');
 /** Hilfs-Prüfer: Befehl ohne Shell (Argumentliste) über den Prozessstarter (R5: Register, eigene Gruppe) im Worktree, grün bei Exit 0; Timeout und Abbruchsignal → beenden(id) beendet die ganze Gruppe; über den Semaphor. */
 export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { sem?: Semaphor; timeoutMs?: number; besitzer?: string; signal?: AbortSignal } = {}) => (o.sem ?? pruefSemaphor).run(() => new Promise<{ ok: boolean; log: string }>((res) => {
   let log = '', fertig = false;
-  const { id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'pruefung', cwd });
+  const { id, kind } = starte(cmd, args, { besitzer: o.besitzer ?? 'bridge', art: 'pruefung', fristMs: o.timeoutMs ?? 15 * 60_000, cwd });
   const an = (d: Buffer) => { log = (log + d).slice(-8000); };
   kind.stdout?.on('data', an); kind.stderr?.on('data', an);
-  const brichAb = () => { if (!fertig && id) void beenden(id); };
+  let abgebrochen = false;
+  const brichAb = () => { abgebrochen = true; if (!fertig && id) void beenden(id); };
   const ende = (ok: boolean, zusatz = '') => { if (fertig) return; fertig = true; clearTimeout(t); o.signal?.removeEventListener('abort', brichAb); res({ ok, log: (log + zusatz).slice(-4000) }); };
   let zeit = false;
   const t = setTimeout(() => { zeit = true; brichAb(); }, o.timeoutMs ?? 15 * 60_000); // Ergebnis erst bei 'close': Kind ist dann abgeholt, kein Zombie in der Gruppe
@@ -150,7 +151,7 @@ export const pruefLauf = (cwd: string, cmd: string, args: string[] = [], o: { se
   kind.on('error', (e) => ende(false, String(e)));
   let rc: number | null = null;
   kind.on('exit', (code) => { rc = code; if (kind.pid) groupKill(kind.pid); }); // Enkel mit geerbter Pipe würde 'close' sonst bis zum Timeout aufhalten
-  kind.on('close', (code) => ende((rc ?? code) === 0 && !zeit, zeit ? '\n[Timeout]' : ''));
+  kind.on('close', (code) => ende((rc ?? code) === 0 && !zeit && !abgebrochen, zeit ? '\n[Timeout]' : ''));
 }));
 
 // ---- Statistik und Abschaltregel ---------------------------------------------------------------------------------------------------
