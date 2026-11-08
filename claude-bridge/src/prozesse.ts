@@ -64,13 +64,14 @@ export function starte(cmd: string, args: string[], o: StarteOpt): { id: string;
   reg.set(id, e); schreibe();
   const an = () => { e.zuletztAktiv = jetzt(); };
   kind.stdout?.on('data', an); kind.stderr?.on('data', an);
-  kind.once('exit', () => { if (reg.delete(id)) schreibe(); });
+  // Leader weg → Rest der Gruppe (Enkel mit geerbter Gruppe) beenden, erst dann austragen; ESRCH = Gruppe schon leer.
+  kind.once('exit', () => { try { process.kill(-pid, 'SIGKILL'); } catch { /* Gruppe schon tot */ } if (reg.delete(id)) schreibe(); });
   return { id, kind };
 }
 
 export const aktivitaet = (id: string): number | null => reg.get(id)?.zuletztAktiv ?? null;
 export const liste = (f?: { besitzer?: string; art?: string }): Eintrag[] =>
-  [...reg.values()].filter((e) => (!f?.besitzer || e.besitzer === f.besitzer) && (!f?.art || e.art === f.art));
+  [...reg.values()].filter((e) => (!f?.besitzer || e.besitzer === f.besitzer) && (!f?.art || e.art === f.art)).map((e) => ({ ...e }));
 
 /** Alle Einträge mit dieser id oder diesem Besitzer: nur wenn PID + Startzeit passen, Gruppe TERM → KILL. Anzahl tatsächlich beendeter. */
 export async function beenden(idOderBesitzer: string, fristMs = 6000): Promise<number> {

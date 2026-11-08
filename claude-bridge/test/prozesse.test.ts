@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { starte, beenden, liste, aktivitaet, registerDatei, vorlaufLesen, procStart, lebt } from '../src/prozesse.ts';
+import { starte, beenden, liste, aktivitaet, registerDatei, vorlaufLesen, procStart, lebt, beendenProz } from '../src/prozesse.ts';
 
 const tot = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e: any) { return e.code === 'ESRCH'; } };
 const warte = async (f: () => boolean, ms = 5000) => { for (let t = 0; t < ms && !f(); t += 50) await new Promise((r) => setTimeout(r, 50)); return f(); };
@@ -34,9 +34,8 @@ test('fremde PID (pid passt, Startzeit nicht) wird nicht getötet', async () => 
   try {
     assert.ok(procStart(kind.pid!));
     assert.equal(lebt({ pid: kind.pid!, start: 'falsch' }), false);
-    // Eintrag mit falscher Startzeit unterschieben
-    liste().find((x) => x.id === id)!.start = 'falsch';
-    assert.equal(await beenden(id, 400), 0);
+    assert.equal(await beendenProz({ pid: kind.pid!, start: 'falsch' }, 400), false);
+    assert.equal(liste().find((x) => x.id === id)!.start, procStart(kind.pid!), 'echter Eintrag unberührt');
     assert.equal(tot(kind.pid!), false, 'lebt weiter');
   } finally { try { process.kill(-kind.pid!, 'SIGKILL'); } catch { /* weg */ } }
   assert.ok(await warte(() => tot(kind.pid!)));
@@ -59,4 +58,24 @@ test('vorlaufLesen liefert Einträge einer früheren Datei, leer bei fehlender',
   assert.deepEqual(vorlaufLesen(join(dir, 'gibtsnicht.json')), []);
   const { id, kind } = starte('sleep', ['600'], { besitzer: 'v', art: 'test' });
   try { assert.ok(vorlaufLesen(reg).some((x) => x.id === id)); } finally { try { process.kill(-kind.pid!, 'SIGKILL'); } catch { /* weg */ } }
+});
+
+test('liste() liefert Kopien: Änderung daran erreicht das Register nicht', () => {
+  const { id, kind } = starte('sleep', ['600'], { besitzer: 'k', art: 'test' });
+  try {
+    const e = liste({ besitzer: 'k' })[0]; const start = e.start; e.start = 'x'; e.besitzer = 'y';
+    assert.equal(liste({ besitzer: 'k' })[0].start, start);
+  } finally { try { process.kill(-kind.pid!, 'SIGKILL'); } catch { /* weg */ } }
+});
+
+test('Leader endet, Enkel lebt in der Gruppe → Gruppe wird beendet, Eintrag weg', async () => {
+  const enkelDatei = join(dir, 'enkel2');
+  const { id, kind } = starte('sh', ['-c', `sleep 600 & echo $! > ${enkelDatei}; exit 0`], { besitzer: 'leader', art: 'test' });
+  await new Promise((r) => kind.once('exit', r));
+  assert.ok(await warte(() => existsSync(enkelDatei) && readFileSync(enkelDatei, 'utf8').trim() !== ''));
+  const enkel = Number(readFileSync(enkelDatei, 'utf8').trim());
+  try {
+    assert.ok(await warte(() => tot(enkel)), 'Enkel tot');
+    assert.equal(liste().some((x) => x.id === id), false);
+  } finally { try { process.kill(enkel, 'SIGKILL'); } catch { /* weg */ } }
 });
