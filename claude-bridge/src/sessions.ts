@@ -44,6 +44,7 @@ import { fehlerklasse, fehlerklassenAn } from './fehlerklassen.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
 import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
 import { auslastung as claudeAuslastung } from './auslastung.ts';
+import { starteWaechter } from './waechter.ts';
 
 // claude-bridge/tsconfig.json fährt strictNullChecks aus. Darum grenzt `p.ok` eine Ergebnis-Union
 // ({ ok: true, … } | { ok: false, why }) nicht ein — den Grund hier typseitig holen, ohne Laufzeitänderung.
@@ -511,6 +512,8 @@ export function reapIdle(now = Date.now()): number {
 }
 budgetMelder((user, text) => log('melious-budget', { user, text }));   // Airbag/Abgleich: Ereignis im Log (Meldung an Knut über die Schlange: „wartet: Energie …“)
 setInterval(() => { try { budgetTick(); if (budgetAn()) claudeAuslastung().then((a) => leseAktualisieren(a.fuenfH)).catch(() => {}); } catch { /* egal */ } try { reapIdle(); } catch (e: any) { log('leerlauf-prüfung fehlgeschlagen', { error: String(e?.message ?? e).slice(0, 120) }); } }, 60_000).unref();
+// R10: Prozess-Wächter — Check-in/Beenden als Statuszeile des Strangs (erscheint als `jetzt` in orchStateOf); Besitzer = Strangschlüssel.
+starteWaechter({ melde: (besitzer, text, art) => { const l = lives.get(besitzer); if (l) emitStatus(l, text); log(`wächter ${art}`, { besitzer, text }); } });
 
 const STARTED_AT = Date.now();
 /** R31 (werkbank_stand): Wertklassen der Schalter dieses Prozesses — aufgezählte Werte bleiben, alles andere heißt „gesetzt“. */
