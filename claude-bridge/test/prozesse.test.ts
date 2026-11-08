@@ -92,3 +92,16 @@ test('beendenProz: Leader endet auf TERM, Enkel ignoriert TERM → Enkel wird tr
     assert.equal(laeuft(enkel), false, 'Enkel läuft nicht mehr');
   } finally { try { process.kill(-k.pid!, 'SIGKILL'); } catch { /* weg */ } }
 });
+
+test('beenden(besitzer) endet auch Untereinträge `<besitzer>#…` (Endprüfung), aber keinen Namensvetter', async () => {
+  const b = `u:strang-${process.pid}-${Date.now()}`;
+  const haupt = starte('sleep', ['600'], { besitzer: b, art: 'claude-cli' });
+  const unter = starte('sleep', ['600'], { besitzer: `${b}#endpruefung`, art: 'claude-cli' });
+  const vetter = starte('sleep', ['600'], { besitzer: `${b}x`, art: 'claude-cli' });
+  try {
+    assert.equal(await beenden(b, 2000), 2, 'Haupt- und Untereintrag beendet');
+    assert.equal(laeuft(haupt.kind.pid!), false);
+    assert.equal(laeuft(unter.kind.pid!), false, 'Endprüfung läuft nicht weiter');
+    assert.equal(laeuft(vetter.kind.pid!), true, 'Namensvetter bleibt');
+  } finally { await beenden(vetter.id, 2000); await beenden(unter.id, 2000); }
+});

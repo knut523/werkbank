@@ -127,7 +127,8 @@ export const liste = (f?: { besitzer?: string; art?: string }): Eintrag[] =>
 
 /** Alle Einträge mit dieser id oder diesem Besitzer: nur wenn PID + Startzeit passen, Gruppe TERM → KILL. Anzahl tatsächlich beendeter. */
 export async function beenden(idOderBesitzer: string, fristMs = 6000): Promise<number> {
-  const ziele = [...reg.values()].filter((e) => e.id === idOderBesitzer || e.besitzer === idOderBesitzer);
+  // Ein Besitzer umfasst seine Untereinträge `<besitzer>#…` (z. B. die Endprüfung eines Strangs) — sonst überlebten sie das Ende des Strangs.
+  const ziele = [...reg.values()].filter((e) => e.id === idOderBesitzer || e.besitzer === idOderBesitzer || e.besitzer.startsWith(`${idOderBesitzer}#`));
   const r = await Promise.all(ziele.map((e) => beendenProz(e, fristMs)));
   return r.filter(Boolean).length;
 }
