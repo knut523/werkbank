@@ -1549,6 +1549,10 @@ const SWITCH_NOTE = 'Hinweis: Ein vorheriger Versuch für diese Nachricht lief �
 const CONTINUE_PROMPT ='Mach bitte genau dort weiter, wo du unterbrochen wurdest — das Claude-Konto wurde gewechselt, weil das Kontingent ausgeschöpft war. Wiederhole keine Schritte, die schon erledigt sind.';
 
 /** Führt eine Nachricht aus. Kehrt zurück, sobald die HTTP-Antwort geschlossen werden kann. */
+/** Best-of-N-Kennung eines Strangs: Branch-/Ordnername und Schlüssel des Zustands in bauerstrang.ts. Muss den ganzen Strangschlüssel
+ *  unterscheiden — die letzten 12 Zeichen kommen allein aus der Unterhaltungs-Kennung und kollidieren zwischen Strängen. */
+export const bestofnId = (key: string): string => safeId(key);
+
 export async function handleTurn(req: TurnRequest): Promise<void> {
   const key = sitzungsKey(req.userId, req.convId);
   const seen = lastSeen.get(key);
@@ -2804,8 +2808,8 @@ async function strangOc2(live: Live, req: TurnRequest, prompt: string): Promise<
     async bauen(p, runde) {
       if (live.abort.signal.aborted) return { ok: false, text: '', grund: 'abgebrochen' };
       // Best-of-N (bauerrennen.ts, BRIDGE_BESTOFN=aus schaltet ab): erster Zug = zwei Bauer, danach Verlierer-Retry/Eskalation statt Fix.
-      if (runde === 1) { const b = await bestofnStrang({ cwd, id: live.key.slice(-12), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
-      else { const f = await bestofnAblehnung(live.key.slice(-12), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; const z = ablehnungsZiel(f); if (z) return z; }   // Eskalation = Sonnet-Klasse: ok:false → Claude-Rückfall, nie 'sonnet' auf OC2
+      if (runde === 1) { const b = await bestofnStrang({ cwd, id: bestofnId(live.key), prompt: p, statistikPfad: join(cfg.stateDir, 'bauerstatistik.json'), status: (t) => emitStatus(live, t), zug: ocZug, pruefe: bestofnPruefe, userId: req.userId }); if (b) return b; }
+      else { const f = await bestofnAblehnung(bestofnId(live.key), p.slice(0, 500)); if (f?.art === 'verlierer') return { ok: true, text: `Verlierer-Diff (${f.bauer}) angewendet`, grund: '', modell: `${f.bauer} (Best-of-N)` }; const z = ablehnungsZiel(f); if (z) return z; }   // Eskalation = Sonnet-Klasse: ok:false → Claude-Rückfall, nie 'sonnet' auf OC2
       emitStatus(live, `⏳ opencode 2 (Melious ${modell}) baut …${runde > 1 ? ` (Runde ${runde}: Befunde des Claude-Verifizierers)` : ''}`);
       const t0 = Date.now();
       const r = await pool.zug({
