@@ -59,7 +59,8 @@ export async function bestofnStrang(o: StrangRennen): Promise<StrangAusgang> {
   const subs = new Map<string, { dir: string; base: string }>(), texte = new Map<string, string>();
   const laufend: { bauer: string; p: Promise<unknown>; offen: () => boolean }[] = [];
   const bauenInner: Deps['bauen'] = async (bauer, a, op) => {
-      const s = await subWorktree(o.cwd, `${o.id}-${kurz(bauer)}`);
+      const anlegen = subWorktree(o.cwd, `${o.id}-${kurz(bauer)}`); op?.vorbereitung?.(anlegen);   // Deckel-Uhr startet erst, wenn der Worktree steht
+      const s = await anlegen;
       if ('error' in s) return { bauer, ok: false, diff: '', log: s.error };
       subs.set(bauer, { dir: s.dir, base: s.base });
       o.status?.(`⏳ Best-of-N: ${bauer} baut in eigenem Worktree …`);
