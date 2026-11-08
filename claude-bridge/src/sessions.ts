@@ -31,8 +31,10 @@ import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { AGENTS, READONLY_ROLES, maxSubagents, orchestratorAppend } from './agents.ts';
 import { skillsFor } from './skills.ts';
 import { testAccount } from './accounts.ts';
+/** Höchstwartezeit eines Zuges auf die Probe unbekannter Konten (BRIDGE_PROBE_WARTE_MS, Vorgabe 30 s). */
+const probeWarteMs = () => { const n = Number(process.env.BRIDGE_PROBE_WARTE_MS); return Number.isFinite(n) && n >= 0 ? n : 30_000; };
 const MOCK_PROBE = process.env.BRIDGE_MOCK === '1' || process.env.BRIDGE_MOCK === 'true';
-import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
+import { rolleVon, budgetOrdnen, budgetMerkeIn, claudeBudgetGrund, endpruefungKontoFuer, zugGelaufen, probeUnbekannte, probeAusstehend, setzeMelious, budgetAn as claudeBudgetAn } from './claudebudget.ts';
 import { warte, wecke, inSchlange, schlangeAn, laenge, angemeldet, merkeIn, vergiss, maxWarteMs } from './schlange.ts';
 import { opencode2An, opencode2Ab, opencode2Pool, opencode2Laeufer, oc2Schreibrechte, oc2SchreibtDraussen, type LaeuferNutzung } from './laeufer.ts';
 import { bestofnStrang, bestofnAblehnung, ablehnungsZiel } from './bauerstrang.ts';
@@ -1906,16 +1908,28 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   if (claudeBudgetAn() && process.env.BRIDGE_CLAUDE_KONTO_MAP) void auslastung().catch(() => {});   // hält die Konto-Lage (cswap, höchstens alle 5 min) frisch
   setzeMelious(req.userId, !!melAcc && meliousUsable(melAcc, exhaustedOf(safeId(req.userId)), Date.now()));   // roher Wert: setzeMelious bildet safeId selbst
   // Konten ohne Usage („unbekannt“) erst nach einem echten Probe-Aufruf (kleinstes Modell, ein Satz) freigeben — beim ersten Sehen, danach alle 30 min.
-  if (claudeBudgetAn() && !MOCK_PROBE) void probeUnbekannte(accounts.filter((a) => !isMelious(a)).map((a) => a.id), async (id) => {
+  const claudeIds = accounts.filter((a) => !isMelious(a)).map((a) => a.id);
+  const probe = claudeBudgetAn() && !MOCK_PROBE ? probeUnbekannte(claudeIds, async (id) => {
     const a = accounts.find((x) => x.id === id);
     return !!a && (await testAccount(req.query as any, { token: a.token, cwd: scratch, home, probe: true })).ok;
-  }).catch(() => {});
+  }).catch(() => {}) : null;
   let queue = live.worker ? workerQueue() : leadQueue();
+  // Alle Claude-Konten „unbekannt“ (cswap ohne Usage, z. B. frisch eingetragene Tokens): die Schlange ist leer, bis die Probe lief.
+  // Auf die laufende bzw. fällige Probe warten (höchstens 30 s) und neu rechnen — sonst scheitert der erste Zug, auch Leads und der Hauptchat.
+  if (!queue.length && probe && probeAusstehend(claudeIds)) {
+    emitStatus(live, '⏳ Neues Claude-Konto wird geprüft …');
+    let wecker: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([probe, new Promise((r) => { wecker = setTimeout(r, probeWarteMs()); })]);
+    clearTimeout(wecker);
+    queue = live.worker ? workerQueue() : leadQueue();
+  }
   const tokens = accounts.map((a) => a.token);
   const redact = (t: string) => tokens.reduce((x, tok) => x.replaceAll(tok, '***'), t);
   if (!queue.length) {
-    // Nur Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten.
-    emitStatus(live, '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.');
+    // Worker: kein Konto frei (C7) — sofort zurück an den Lead, kein Warten. Leads, Chats und der Hauptchat: kein Worker-Text.
+    emitStatus(live, live.worker
+      ? '⚠️ Für diesen Worker ist gerade kein Konto frei (Melious unter der Reserve oder aus, Claude-Deckel für Worker erreicht oder ein Claude-Konto erschöpft) — der Lead macht es selbst.'
+      : '⚠️ Kein Claude-Konto ist gerade nutzbar: neue Konten ohne Nutzungsdaten werden erst nach einem erfolgreichen Probe-Aufruf freigegeben, und der ist (noch) nicht gelungen. Bitte in einer Minute erneut senden.');
     live.outcome = 'rate_limit';
     setTurn(key, { start: live.t0, end: Date.now(), outcome: 'rate_limit' });
     end(live);
