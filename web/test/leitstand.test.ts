@@ -209,7 +209,7 @@ before(async () => {
   const state = join(tmp, 'bridge');
   bridge = spawn(process.execPath, ['src/server.ts'], {
     cwd: join(WEB, '..', 'claude-bridge'),
-    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: state, BRIDGE_ALLOWED_EMAILS: '', BRIDGE_CLAUDE_CONFIG_SHARED: '',
+    env: { ...process.env, BRIDGE_MOCK: '1', BRIDGE_DRAIN: 'aus', BRIDGE_PORT: String(BRIDGE_PORT), BRIDGE_STATE_DIR: state, BRIDGE_ALLOWED_EMAILS: '', BRIDGE_CLAUDE_CONFIG_SHARED: '',
       BRIDGE_CLAUDE_HOMES: join(tmp, 'homes'), WERKBANK_INTERNAL_TOKEN: INTERNAL, WERKBANK_URL: B, WERKBANK_ORCH_ROOTS: ROOT, BRIDGE_VAULT_DIR: join(tmp, 'vault'),
       BRIDGE_PERMISSION_MODE: 'auto', BRIDGE_AUTO_SCOPE: 'voll', BRIDGE_AUTO_EMAILS: `${knut.email},${team.email}`, WERKBANK_SKILLS_SOURCE: join(tmp, 'skills'), LEITSTAND_MCP_FILE: join(tmp, 'keins.json') },
     stdio: 'ignore',
@@ -229,7 +229,11 @@ before(async () => {
 });
 
 after(async () => {
-  web?.kill(); bridge?.kill(); lcFake?.close();
+  // Beide Kinder beenden und ihr Ende abwarten: Die Brücke wartet nach SIGTERM sonst bis zu BRIDGE_DRAIN_SEK (120 s) auf laufende Züge und hält
+  // den Testprozess als offenes Handle am Leben (BRIDGE_DRAIN=aus oben: der Test prüft den Drain nicht). Schon beendete Kinder: nichts zu tun.
+  const ende = (c?: ChildProcess) => c && c.exitCode === null && c.signalCode === null ? new Promise<void>((r) => { c.once('exit', () => r()); c.kill(); }) : Promise.resolve();
+  await Promise.all([ende(web), ende(bridge)]);
+  lcFake?.close(); lcFake?.closeAllConnections?.();
   await mongo.db(DB).dropDatabase(); await mongo.db(LCDB).dropDatabase(); await mongo.close();
 });
 
