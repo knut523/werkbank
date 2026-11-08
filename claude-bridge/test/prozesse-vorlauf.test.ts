@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { vorlaufAufraeumen, procStart, type Eintrag } from '../src/prozesse.ts';
+import { vorlaufAufraeumen, procStart, type Eintrag, laeuft } from '../src/prozesse.ts';
 
 const tot = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e: any) { return e.code === 'ESRCH'; } };
 const warte = async (f: () => boolean, ms = 8000) => { for (let t = 0; t < ms && !f(); t += 50) await new Promise((r) => setTimeout(r, 50)); return f(); };
@@ -37,7 +37,7 @@ test('vorlaufAufraeumen: eigene lebende Gruppe tot, fremder Eintrag (falsche Sta
     const n = await vorlaufAufraeumen(reg);
     assert.ok(n >= 1, 'mindestens ein Eintrag geräumt');
     await gruppeTot(dir, eigene);
-    assert.equal(tot(fremd.pid!), false, 'fremder Prozess lebt');
+    assert.equal(laeuft(fremd.pid!), true, 'fremder Prozess läuft weiter (laeuft: Zombie zählt als tot)');
     assert.deepEqual(JSON.parse(readFileSync(reg, 'utf8')), [], 'Registerdatei geleert');
   } finally {
     for (const p of [eigene.leader.pid!, eigene.enkel, fremd.pid!]) { try { process.kill(-p, 'SIGKILL'); } catch { try { process.kill(p, 'SIGKILL'); } catch { /* weg */ } } }

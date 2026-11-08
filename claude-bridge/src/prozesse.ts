@@ -2,7 +2,7 @@
 // Jeder Kindprozess startet über `starte`: eigene Prozessgruppe, Eintrag im Register (Besitzer, PID + Startzeit, Frist, letzte Aktivität),
 // Austrag beim Ende. Beenden, Wächter und Anzeige lesen nur aus diesem Register. Fremde PIDs werden nie signalisiert.
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process';
-import { readFileSync, renameSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export interface Eintrag {
@@ -25,9 +25,20 @@ export async function beendenProz(p: { pid: number; start: string | null }, fris
   if (!lebt(p)) return false;
   const sig = (s: NodeJS.Signals) => { try { process.kill(-p.pid, s); } catch { try { process.kill(p.pid, s); } catch { /* weg */ } } };
   sig('SIGTERM');
-  for (let t = 0; t < frist && lebt(p); t += 200) await new Promise((r) => setTimeout(r, 200));
-  if (lebt(p)) sig('SIGKILL');
+  // Auf die ganze Gruppe warten, nicht nur den Leader: ein Mitglied, das TERM ignoriert, überlebte sonst den Leader.
+  if (!(await gruppeWeg(p.pid, frist))) { sig('SIGKILL'); await gruppeWeg(p.pid, 3000); }
   return true;
+}
+
+/** Läuft der Prozess noch? Weg oder Zombie (beendet, nur noch nicht abgeholt) = läuft nicht. */
+export function laeuft(pid: number): boolean {
+  try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2)[0] !== 'Z'; } catch { return false; }
+}
+/** Wartet, bis kein Mitglied der Prozessgruppe mehr läuft (Zombies zählen als weg). true = Gruppe weg innerhalb der Frist. */
+export async function gruppeWeg(pgid: number, fristMs = 3000): Promise<boolean> {
+  const weg = () => !lebendePids().some((pid) => pgidOf(pid) === pgid && laeuft(pid));
+  for (let t = 0; t < fristMs; t += 50) { if (weg()) return true; await new Promise((r) => setTimeout(r, 50)); }
+  return weg();
 }
 
 const reg = new Map<string, Eintrag>();
@@ -78,6 +89,9 @@ export async function vorlaufAufraeumen(pfad: string, frist = 6000): Promise<num
     // Leader weg (Absturz, kein exit-Handler) → Gruppe kann noch leben: alle /proc-Prozesse mit pgid == e.pid
     // und Startzeit >= e.start suchen und per SIGKILL beenden. Ohne e.start nichts tun (könnte fremd sein).
     if (!e.start || !e.pid) continue;
+    // PID existiert noch, aber mit anderer Startzeit → PID wiederverwendet, Gruppe gehört jemand anderem: nie anfassen.
+    // Nur wenn der Leader ganz weg ist, kann die Gruppe noch Waisen von uns haben (der Kernel vergibt die PID einer belegten Gruppe nicht neu).
+    if (existsSync(`/proc/${e.pid}`)) continue;
     const alt = Number(e.start);
     for (const pid of lebendePids()) {
       const pgid = pgidOf(pid);
