@@ -24,3 +24,18 @@ test('B4: Delta-Review (Runde 2+) verlangt nur Blocker, Runde 1 nicht; Schalter 
   assert.doesNotMatch(reviewPrompt(r, '/wt', '1-x', { dm: { ...dm, delta: null } }), /RUNDE 2\+/);
   assert.equal(deltaNurBlocker({ WERKBANK_REVIEW_DELTA_BLOCKER: 'aus' }), false);
 });
+
+import { besitzerStrang, besitzerAn } from '../server/prfix.ts';
+
+test('B5: Feedback geht an den Strang, der den PR besitzt — Review-Stränge zählen nicht, laufender vor fertigem', () => {
+  const s = [
+    { _id: 'rev', title: 'Review olaf-admin#7', zustand: 'laeuft', lauf: 'PR-Reviews', prReview: { repo: 'WirStrom1/olaf-admin', number: 7 } },
+    { _id: 'alt', title: 'Bau olaf-admin#7', zustand: 'fertig' },
+    { _id: 'bau', title: 'Bau olaf-admin #7 Teil 2', zustand: 'laeuft' },
+    { _id: 'x', title: 'olaf-admin#8', zustand: 'laeuft' },
+  ];
+  assert.equal(besitzerStrang(s, 'WirStrom1/olaf-admin', 7), 'bau');
+  assert.equal(besitzerStrang(s.filter((x) => x._id !== 'bau'), 'WirStrom1/olaf-admin', 7), 'alt');
+  assert.equal(besitzerStrang([s[0]], 'WirStrom1/olaf-admin', 7), null, 'nur der Review-Strang → neuer Strang');
+  assert.equal(besitzerAn({}), true); assert.equal(besitzerAn({ WERKBANK_FIX_BESITZER: 'aus' }), false);
+});

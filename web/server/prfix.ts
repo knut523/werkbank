@@ -19,6 +19,7 @@ import { graphql } from './github.ts';
 import { GIT_SAFE } from './gitsafe.ts';
 import { fixesCol, fixRepoErlaubt, reviewErlaubt, reviewsCol, tickerSettings, tickerAus, type TickerSettings } from './prticker.ts';
 import { klonPfad, prReviewDir, nextPaket, kontextMd, diffMaterial, realGit, scrub, GEHEIM, REVIEW_MODELL, type GitRun, type PrKontext } from './prreview.ts';
+import { strangZuPr } from './v2kern.ts';
 import { schreibeErgebnis, type ExecErgebnis, type ExecJob } from './reviewexec.ts';
 import { alleOffenenPunkte, abhaken, punkteFuerAuftrag, offenText, type AbgehakterPunkt } from './prpunkte.ts';
 
@@ -267,10 +268,22 @@ export function fixPrompt(f: any, o: { wt: string; paket: string; zweig: string;
 
 // ---------- Takt ----------
 
+/** B5: Review-Feedback geht an den Strang, der den PR besitzt (gleiche Session/Bauer). WERKBANK_FIX_BESITZER=aus → immer neuer Strang. */
+export const besitzerAn = (env: Record<string, string | undefined> = process.env) => env.WERKBANK_FIX_BESITZER !== 'aus';
+/** Rein: erster offener Strang zum PR, der kein Review-Strang ist (Review-Stränge tragen prReview/lauf PR-Reviews); sonst null. */
+export function besitzerStrang(straenge: { _id: string; title?: string; zustand?: string; prompt?: string; lauf?: string; prReview?: { repo?: string; number?: number } | null; berichtKopf?: any }[], repo: string, number: number): string | null {
+  const kein = straenge.filter((x) => x.lauf !== 'PR-Reviews');
+  const t = strangZuPr(kein, repo, number);
+  return (t.find((x) => x.zustand !== 'fertig') ?? t[0])?.id ?? null;
+}
+
 export interface FixDeps {
   userById: (id: string) => Promise<any>;
   startOrch: (u: any, inp: any) => Promise<{ id: string }>;
   strandDoc: (id: string) => Promise<any>;
+  /** B5 (Wave 21): offener Strang, der den PR besitzt (Bauer-Strang, kein Review) — Feedback geht dorthin statt in eine neue Session. */
+  besitzer?: (f: any) => Promise<string | null>;
+  sendStrand?: (f: any, strand: string, text: string) => Promise<unknown>;
   /** Lese-Git (holt den PR in den Review-Klon). */
   git?: GitRun;
   pr: (repo: string, n: number) => Promise<PrLage | null>;
@@ -404,7 +417,9 @@ async function fixTickInnen(deps: FixDeps): Promise<{ started: number; done: num
   // 1) Laufende: Strang fertig → prüfen → pushen oder ablehnen
   for (const f of (await fixesCol().find({ status: 'läuft' }).toArray()) as any[]) {
     const d = f.strand ? await deps.strandDoc(f.strand) : null;
-    const fertig = !!(d && (d.reviewReadyAt || d.knutReviewedAt || d.reviewedAt || d.lastStatus === 'done'));
+    // B5: ein wiederverwendeter Strang hat alte Marken — gezählt wird nur, was nach dem Feedback kam.
+    const nach = (t: any) => !!t && (!f.wieder || new Date(t).getTime() > new Date(f.startedAt ?? 0).getTime());
+    const fertig = !!(d && (nach(d.reviewReadyAt) || nach(d.knutReviewedAt) || nach(d.reviewedAt) || (!f.wieder && d.lastStatus === 'done')));
     const kaputt = !d || !!d.autoStopped || now.getTime() - new Date(f.startedAt ?? now).getTime() > 6 * 3600_000;
     if (!fertig && !kaputt) continue;
     const claim = await fixesCol().updateOne({ _id: f._id, status: 'läuft' }, { $set: { status: 'prüft', at: now } });
@@ -484,9 +499,12 @@ async function starte(f: any, s: TickerSettings, deps: FixDeps, g: GitRun, now: 
   for (const [name, text] of Object.entries(dm.dateien)) writeFileSync(join(dir, name), text);
   const prompt = fixPrompt({ ...f, head }, { wt, paket, zweig: pr!.headRefName, basis: pr!.baseRefName, kontext: !!kontext, offene: f.auftrag ? '' : offenePunkte(kontext, f.by), gate: deps.gatePfad ?? null, alle: kontext ? punkteFuerAuftrag(alleOffenenPunkte(kontext)) : undefined });
   writeFileSync(join(dir, 'auftrag.md'), prompt + '\n');
-  const st = await deps.startOrch(u, { title: `Fix ${f.repo.split('/')[1]}#${f.number}`, prompt, cwd: wt, code: false, profil: 'bauer', lauf: 'PR-Fixes', aufrufer: 'pr-ticker', tiefe: 'regular', modell: REVIEW_MODELL, vorrang: true });
+  // B5: gibt es einen Strang, der den PR besitzt, bekommt er das Feedback in seiner Session; sonst wie bisher ein neuer Fix-Strang.
+  let wieder: string | null = besitzerAn() && deps.besitzer && deps.sendStrand ? await deps.besitzer(f).catch(() => null) : null;
+  if (wieder) { try { await deps.sendStrand!(f, wieder, prompt); } catch (e: any) { deps.log?.('pr-fix besitzer', { pr: `${f.repo}#${f.number}`, error: scrub(e?.message ?? e) }); wieder = null; } }
+  const st = wieder ? { id: wieder } : await deps.startOrch(u, { title: `Fix ${f.repo.split('/')[1]}#${f.number}`, prompt, cwd: wt, code: false, profil: 'bauer', lauf: 'PR-Fixes', aufrufer: 'pr-ticker', tiefe: 'regular', modell: REVIEW_MODELL, vorrang: true });
   // Nur aus „startet“ (Gegenprüfung M1): hat der Reaper den Eintrag inzwischen abgeschlossen, wird er nie geprüft oder gepusht.
-  await fixesCol().updateOne({ _id: f._id, status: 'startet' }, { $set: { status: 'läuft', strand: st.id, paket, worktree: wt, head, zweig: pr!.headRefName, basis: pr!.baseRefName, mb: dm.basis, autor: kontext?.author ?? null, eta: FIX_ETA_MIN, note: dm.hinweis.join('; ') || null } });
+  await fixesCol().updateOne({ _id: f._id, status: 'startet' }, { $set: { status: 'läuft', strand: st.id, wieder: !!wieder, paket, worktree: wt, head, zweig: pr!.headRefName, basis: pr!.baseRefName, mb: dm.basis, autor: kontext?.author ?? null, eta: FIX_ETA_MIN, note: dm.hinweis.join('; ') || null } });
   deps.log?.('pr-fix gestartet', { pr: `${f.repo}#${f.number}`, strand: st.id });
   await setzeStatus(f, fixZeile({ art: 'running', eta: FIX_ETA_MIN }), deps, now);
   return true;
