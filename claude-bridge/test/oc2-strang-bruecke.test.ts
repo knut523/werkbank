@@ -117,7 +117,7 @@ test('Schalter aus: der OC2-Strang läuft sichtbar mit Claude, mit Grund', async
 });
 
 test('Gate: GLM baut, Claude lehnt ab → Befunde an DIESELBE Sitzung → ok; zweiter Zug setzt die Sitzung fort; MCP und Buchung', async () => {
-  await start({ BRIDGE_OPENCODE2_STRANG: 'an' });
+  await start({ BRIDGE_BESTOFN: 'aus', BRIDGE_OPENCODE2_STRANG: 'an' });
   try {
     const dir = wt('gate'), c = conv(2); await register(c, dir);
     const t = await send(c, 'BAUE die Datei MOCK-ABLEHNEN');
@@ -148,7 +148,7 @@ test('Gate: GLM baut, Claude lehnt ab → Befunde an DIESELBE Sitzung → ok; zw
 
 test('Melious unter der Untergrenze: kein OC2-Zug, Claude mit Grund', async () => {
   konten = [{ id: 'chat', label: 'Chat', token: null }, { ...MEL, fuell: 0.01 }];
-  await start({ BRIDGE_OPENCODE2_STRANG: 'an', BRIDGE_MELIOUS_BODEN: '5' });
+  await start({ BRIDGE_BESTOFN: 'aus', BRIDGE_OPENCODE2_STRANG: 'an', BRIDGE_MELIOUS_BODEN: '5' });
   try {
     const vorher = spur('prompt').length;
     const c = conv(3); await register(c, wt('boden'));
