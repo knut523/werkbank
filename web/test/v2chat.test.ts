@@ -171,3 +171,28 @@ test('Modellwahl: ein älterer Chat (nicht unter den neuesten 30) behält sein M
   assert.equal(await chat.chatModell(uO, alt.conv), 'opus');
   assert.equal(await chat.chatModell(uO, 'v2-00000000-0000-0000-0000-000000000000'), null);
 });
+
+test('Zug-Ende: die Sperre ist frei, sobald „fertig“ sichtbar ist — wer sofort weiterschreibt, bekommt keine Besetzt-Antwort (deterministisch)', async () => {
+  const uE = { ...u, id: 'u-ende' };
+  const deps = (br: any) => ({ bridgeUrl: 'http://bruecke', token: async () => 't', fetch: br.f });
+  // Naht: die Bestätigung des „fertig“-Schreibens wird festgehalten — „fertig“ steht dann schon in der Datenbank, der Zug ist aber noch nicht zurückgekehrt.
+  const proto: any = Object.getPrototypeOf(chat.nachrichten());
+  const echt = proto.updateOne;
+  let fertigGeschrieben!: () => void, haelt!: () => void;
+  const sichtbar = new Promise<void>((r) => { fertigGeschrieben = r; });
+  const gate = new Promise<void>((r) => { haelt = r; });
+  proto.updateOne = async function (this: any, f: any, upd: any, ...rest: any[]) {
+    const res = await echt.call(this, f, upd, ...rest);
+    if (upd?.$set?.status === 'fertig') { fertigGeschrieben(); await gate; }
+    return res;
+  };
+  try {
+    const b1 = bruecke(); b1.los();
+    const r = await chat.senden(uE, { text: 'eins' }, deps(b1));
+    await sichtbar; // der Client würde jetzt „fertig“ sehen
+    assert.ok((await chat.verlauf(uE, r.conv)).some((n) => n.rolle === 'assistent' && n.status === 'fertig'));
+    const b2 = bruecke(); b2.los();
+    await chat.senden(uE, { text: 'zwei', conv: r.conv }, deps(b2)); // sofort danach: darf nicht 409 sein
+  } finally { proto.updateOne = echt; haelt(); }
+  await bis(async () => (await chat.verlauf(uE, (await chat.meineChats(uE))[0].conv)).filter((n) => n.status === 'fertig' && n.rolle === 'assistent').length === 2);
+});
