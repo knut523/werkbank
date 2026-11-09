@@ -59,6 +59,18 @@ test('Kein Auto-Delta: eigener PR, Autor nicht auf der Liste, letztes Review nic
   assert.equal(await T.queueReviews([stand('WirStrom1/olaf-admin', 405, 'b2', 'bizarrochris')], s, NOW), 0, 'noch nie reviewt');
 });
 
+test('Knut 09.11.: ein gepostetes Review, das im Abgleich hing (nicht „fertig“), zählt als Vorgänger; ein Delta-Post (nachreview) setzt den Kopf', async () => {
+  const repo = 'WirStrom1/olaf-admin';
+  await T.reviewsCol().insertOne({ _id: `${repo}#406@a1` as any, repo, number: 406, head: 'a1', status: 'abgleich', createdAt: new Date(NOW.getTime() - 7200e3), posted: { at: new Date(NOW.getTime() - 3600e3), by: 'knut-manuell' } } as any);
+  assert.equal(await T.queueReviews([stand(repo, 406, 'b2', 'bizarrochris')], s, NOW), 1, 'neuer Kopf nach hängendem, aber gepostetem Review → Delta');
+  const r: any = await T.reviewsCol().findOne({ _id: `${repo}#406@b2` as any });
+  assert.equal(r.trigger, 'delta'); assert.equal(r.vorherHead, 'a1');
+  await T.reviewsCol().insertOne({ _id: `${repo}#407@a1` as any, repo, number: 407, head: 'a1', status: 'abgleich', createdAt: new Date(NOW.getTime() - 7200e3), posted: { at: new Date(NOW.getTime() - 3600e3) }, nachreview: [{ head: 'c3', at: new Date(NOW.getTime() - 600e3) }] } as any);
+  assert.equal(await T.queueReviews([stand(repo, 407, 'c3', 'bizarrochris')], s, NOW), 0, 'den Kopf des Delta-Posts nicht noch einmal');
+  assert.equal(await T.queueReviews([stand(repo, 407, 'd4', 'bizarrochris')], s, NOW), 1);
+  assert.equal(((await T.reviewsCol().findOne({ _id: `${repo}#407@d4` as any })) as any).vorherHead, 'c3', 'Delta gegen den zuletzt geposteten Kopf');
+});
+
 test('Tiefe nach Delta-Größe nur beim Auto-Delta: bis 400 Zeilen quick, darüber regular; sonst wie bisher mindestens regular', () => {
   assert.equal(P.tiefeFuer(120, false, true), 'quick');
   assert.equal(P.tiefeFuer(P.QUICK_BIS, false, true), 'quick');

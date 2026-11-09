@@ -476,6 +476,20 @@ async function nachholen(now: Date, heute: string): Promise<number> {
 }
 
 /**
+ * Letztes Review eines PRs, das am PR angekommen ist oder fertig wurde (Knut 09.11.: „u should always see these“). Bisher zählte nur
+ * `status: 'fertig'` — ein Review, das im Abgleich hing und von Hand (oder später) gepostet wurde, war für Delta und Nachprüfung
+ * unsichtbar, und neue Köpfe mit @review blieben liegen (#412, #256 am 09.11.). Maßgeblich ist der spätere von doneAt und posted.at.
+ */
+export async function letztesReview(repo: string, number: number): Promise<any | null> {
+  const l: any[] = await reviewsCol().find({ repo, number, $or: [{ status: 'fertig' }, { 'posted.at': { $exists: true } }] }).toArray();
+  const zeit = (r: any) => Math.max(new Date(r.doneAt ?? 0).getTime() || 0, new Date(r.posted?.at ?? 0).getTime() || 0, new Date(r.createdAt ?? 0).getTime() || 0);
+  const r = l.sort((a, b) => zeit(b) - zeit(a))[0];
+  // Ein Delta-Post am selben Datensatz (nachreview[]) hat einen späteren Kopf gesehen: der zählt als „zuletzt reviewt“.
+  const nach = Array.isArray(r?.nachreview) && r.nachreview.length ? r.nachreview[r.nachreview.length - 1] : null;
+  return r ? (nach?.head ? { ...r, head: nach.head, doneAt: nach.at ?? r.doneAt } : r) : null;
+}
+
+/**
  * Auto-Delta (Release 20b): Autor auf der Erlaubtliste (nicht wir selbst), letztes Review dieses PRs fertig UND gepostet, an einem
  * anderen Kopf → Delta-Review (`trigger: 'delta'`), Start erst nach DELTA_BUENDEL_MS. Ein noch wartendes Auto-Delta desselben PRs
  * geht in diesem auf (übersprungen, „zusammengefasst“). null = trifft nicht zu (dann gilt die Nachprüfung wie bisher).
@@ -483,7 +497,7 @@ async function nachholen(now: Date, heute: string): Promise<number> {
 async function autoDelta(e: TickerEvent, s: TickerSettings, now: Date): Promise<number | null> {
   const autor = String(e.actor ?? '').toLowerCase();
   if (!autor || autor === ME || !s.allow.map((a) => a.toLowerCase()).includes(autor)) return null;
-  const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
+  const letzte: any = await letztesReview(e.repo, e.number);
   // „Ungepostet wegen veraltetem Kopf“ (ohnePost 'neu') zählt wie gepostet: das Review ist nie am PR angekommen und soll nachgeholt werden.
   if (!(letzte?.posted || letzte?.ohnePost === 'neu') || letzte.head === e.head) return null;
   // Hat der Autor seit dem letzten Review „erledigt“ gemeldet, gilt die Nachprüfung (Paket 223, sofort, ohne Bündeln).
@@ -529,7 +543,7 @@ export async function nachNeuemKopf(r: any, headNeu: string, s: Pick<TickerSetti
  * Kennung PR@Kopf wie beim Tag: je Kopf höchstens ein Review, egal welcher Auslöser.
  */
 async function nachpruefung(e: TickerEvent, s: TickerSettings, now: Date): Promise<number> {
-  const letzte: any = (await reviewsCol().find({ repo: e.repo, number: e.number, status: 'fertig' }).sort({ doneAt: -1 }).limit(1).toArray())[0];
+  const letzte: any = await letztesReview(e.repo, e.number);
   if (!letzte) { if (e.kind === 'erledigt') await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'keine Nachprüfung: noch kein Review dieses PRs' } }); return 0; }
   if (letzte.head === e.head) { if (e.kind === 'erledigt') await tickerCol().updateOne({ _id: e._id as any }, { $set: { note: 'Nachprüfung, sobald ein neuer Commit kommt' } }); return 0; }
   let wer = e.actor;
