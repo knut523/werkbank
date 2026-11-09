@@ -143,13 +143,14 @@ export async function senden(u: User, b: { text: unknown; conv?: unknown; vorlag
       { _id: frage as any, conv, userId: u.id, rolle: 'ich', text, status: 'fertig', at: now, geaendert: now, ...(anh.length ? { anhaenge: anh.map((a) => a.name) } : {}) },
       { _id: antwort as any, conv, userId: u.id, rolle: 'assistent', text: '', status: 'laeuft', at: new Date(now.getTime() + 1), geaendert: now },
     ]);
-    void zug(u, conv, antwort, inhaltMitAnhang(text, anh), token, d, prefix, MODELLE[modell]?.id ?? 'claude-code').finally(() => laufend.delete(u.id));
+    const frei = () => { laufend.delete(u.id); };
+    void zug(u, conv, antwort, inhaltMitAnhang(text, anh), token, d, prefix, MODELLE[modell]?.id ?? 'claude-code', frei).finally(frei);
     return { conv, frage, antwort };
   } catch (e) { laufend.delete(u.id); throw e; }
 }
 
 /** Der Zug: SSE der Brücke lesen, Text alle ~1 s in die Datenbank, am Ende fertig/fehler. */
-async function zug(u: User, conv: string, id: string, text: string | unknown[], token: string, d: ZugDeps, prefix: string | null = null, modell = 'claude-code') {
+async function zug(u: User, conv: string, id: string, text: string | unknown[], token: string, d: ZugDeps, prefix: string | null = null, modell = 'claude-code', frei: () => void = () => {}) {
   const f = d.fetch ?? fetch;
   let out = '', last = 0;
   const set = (x: Record<string, unknown>) => nachrichten().updateOne({ _id: id as any }, { $set: { ...x, geaendert: new Date() } });
@@ -174,10 +175,13 @@ async function zug(u: User, conv: string, id: string, text: string | unknown[], 
       }
       if (Date.now() - last > 1000) { last = Date.now(); await set({ text: out }); }
     }
+    // Erst die Sperre lösen, dann „fertig“ schreiben: was der Client als Ende sieht, darf nie vor der Freigabe liegen (bis dahin hält noch „läuft“ in der Datenbank die Besetzt-Prüfung).
+    frei();
     await set({ text: out, status: 'fertig', fertigAt: new Date() });
   } catch (e: any) {
     d.log?.('v2 chat fehler', { user: u.id, conv, error: String(e?.message ?? e).slice(0, 200) });
     const fehler = e?.name === 'TimeoutError' ? 'Die Antwort hat zu lange gedauert und wurde abgebrochen — frag noch einmal.' : String(e?.message ?? e).slice(0, 300);
+    frei();
     await set({ text: out, status: 'fehler', fehler, fertigAt: new Date() }).catch((x) => d.log?.('v2 chat status', { conv, error: String(x?.message ?? x).slice(0, 120) }));
   }
 }
