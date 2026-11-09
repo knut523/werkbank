@@ -12,6 +12,9 @@ beforeEach(() => k.budgetVergessen());
 
 test('B: scheitert die Vorabbuchung nach bestandener Zulassung, startet der Zug nicht (Ablehnung wie bei der Zulassung), nichts bleibt gebucht', async () => {
   const m = await import('../src/sessions.ts');
+  // Sperre gibt es nur noch im harten Modus (Standard weich, Knut 09.11.).
+  const vorher = process.env.BRIDGE_MELIOUS_BUDGET; process.env.BRIDGE_MELIOUS_BUDGET = 'hart';
+  try {
   const STATE = mkdtempSync(join(tmpdir(), 'strangid-buchung-'));
   const DIR = mkdtempSync(join(tmpdir(), 'strangid-buchung-dir-'));
   const pfile = join(STATE, 'melious-budget.json');
@@ -37,4 +40,5 @@ test('B: scheitert die Vorabbuchung nach bestandener Zulassung, startet der Zug 
   assert.equal(query, 0, 'kein Lauf gestartet');
   const offen = Object.values<any>(JSON.parse(readFileSync(pfile, 'utf8')).zustaende).flatMap((z) => (z.offen ?? []).filter((o: any) => o.id === key));
   assert.deepEqual(offen, [], 'keine Vorabbuchung für den abgelehnten Zug');
+  } finally { if (vorher === undefined) delete process.env.BRIDGE_MELIOUS_BUDGET; else process.env.BRIDGE_MELIOUS_BUDGET = vorher; }
 });

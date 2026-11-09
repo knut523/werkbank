@@ -50,7 +50,7 @@ import { auslastung, auslastungZeile } from './auslastung.ts';
 import { strangRegeln } from './strangregeln.ts';
 import { fehlerklasse, fehlerklassenAn } from './fehlerklassen.ts';
 import { acquire, erschoepftMeldung, fp, exhaustedOf, markExhausted, normalizeAccounts, resetMs, isRateLimitText, planQueue, accountEnv, isMelious, meliousUsable, meliousChatOn, meliousChatModel, setMeliousChat, meliousBaseUrl, MELIOUS_MODEL, meliousExhaustedError, meliousErrorKind, meliousResetAt, energieOf, nextBerlinMonth, imAbo, MELIOUS_GROSS, MELIOUS_ABO, countMelious, usageOf, usageTotal, MELIOUS_HINT, meliousHartAus, unterBoden, meliousBoden, type Account, type MeliousUsage, type MeliousFehler, type Faktor } from './accounts.ts';
-import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, type Kapazitaet } from './kapazitaet.ts';
+import { istJobtyp, budgetPersistenz, type Jobtyp, kapazitaetGrund, kapazitaetJetzt, kapazitaetLaden, jobtypVon, RANG, budgetBuche, budgetFehler, budgetTick, budgetFreigeben, budgetMelder, leseAktualisieren, leseAufClaude, budgetAn, budgetHart, type Kapazitaet } from './kapazitaet.ts';
 import { auslastung as claudeAuslastung } from './auslastung.ts';
 import { starteWaechter } from './waechter.ts';
 
@@ -1672,7 +1672,8 @@ export async function handleTurn(req: TurnRequest): Promise<void> {
   // die Buchung, ist das eine Ablehnung wie bei der Zulassung — der Zug startet nicht (Ursache: beides war nicht eine Entscheidung).
   if (lock === 'ok' && kind === 'strand' && kapLaden && kapOpt.jobtyp && kapOpt.userId && melBuchbar) {
     const b = budgetBuche(kapOpt.userId, key, kapOpt.jobtyp);
-    if (!b.ok) { lockGrund = b.grund || 'Energie-Budget reicht gerade nicht'; lock = 'chat-busy'; }
+    // Weich: ein Claude-Zug startet auch bei offenem Breaker (er verbraucht selbst keine Melious-Energie); gebucht wird trotzdem nicht.
+    if (!b.ok && (budgetHart() || !kapOpt.claude)) { lockGrund = b.grund || 'Energie-Budget reicht gerade nicht'; lock = 'chat-busy'; }
   }
   if (lock !== 'ok') {
     if (orchMap[key]) setTurn(key, { start: Date.now(), end: Date.now(), outcome: 'busy', ...(lockGrund ? { grund: lockGrund.slice(0, 200) } : {}) });

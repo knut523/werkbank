@@ -8,6 +8,7 @@ const H = 3_600_000;
 const TAG = Date.UTC(2026, 10, 9, 11, 0);          // 12:00 Berlin
 const NACHT = Date.UTC(2026, 10, 9, 22, 30);       // 23:30 Berlin
 const U = 'u1';
+const HART = { BRIDGE_MELIOUS_BUDGET: 'hart' };   // die alten Sperr-Tests laufen im harten Modus; weich ist der Standard (Test 10)
 const lage = (o: Partial<k.Kapazitaet> = {}): k.Kapazitaet => ({ meliousProzent: 24, unterBoden: false, claudeFrei: true, claudeFreiAb: null, prWartend: 0, stand: 243_000, topfMax: 1_024_000, echt: true, ...o });
 beforeEach(() => k.budgetVergessen());
 
@@ -18,58 +19,58 @@ test('1 Eimer: Füllrate 8000/h, Burst 30k, Tempo (Stand − Boden)/Horizont, ü
   assert.equal(k.tempoRate(40_000, c.boden, c.topf, c), 0, 'unter Boden → 0');
   assert.equal(k.tempoRate(1_000_000, c.boden, c.topf, c), 16_000, 'über 90 % Topf: Budget hoch');
   // Eimer leer buchen, 1 h später 8000 mehr, nie über Burst
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
-  for (let i = 0; k.budgetBuche(U, 'j' + i, 'bauer', TAG, {}).ok; i++) assert.ok(i < 20);
-  assert.match(k.budgetGrund(U, 'bauer', TAG, {}), /^wartet: Energie-Budget/);
-  assert.equal(k.budgetGrund(U, 'bauer', TAG + 1 * H, {}), '', 'nach 1 h wieder 8000 im Eimer (> 4500)');
-  const z = k.budgetBuche(U, 'x', 'lesen', TAG + 100 * H, {});
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
+  for (let i = 0; k.budgetBuche(U, 'j' + i, 'bauer', TAG, HART).ok; i++) assert.ok(i < 20);
+  assert.match(k.budgetGrund(U, 'bauer', TAG, HART), /^wartet: Energie-Budget/);
+  assert.equal(k.budgetGrund(U, 'bauer', TAG + 1 * H, HART), '', 'nach 1 h wieder 8000 im Eimer (> 4500)');
+  const z = k.budgetBuche(U, 'x', 'lesen', TAG + 100 * H, HART);
   assert.ok(z.ok);
 });
 
 test('2 Vorabbuchung: 3× Median je Jobtyp, Vorgabe ohne Daten, Abrechnung gegen Ist erstattet die Differenz', () => {
-  const a = k.budgetBuche(U, 'a', 'pruefung', TAG, {});
+  const a = k.budgetBuche(U, 'a', 'pruefung', TAG, HART);
   assert.deepEqual([a.ok && a.betrag], [900], 'Vorgabe 3 × 300');
-  k.budgetAbrechnen(U, 'a', 284, TAG, {});
-  for (const [i, e] of [284, 300, 290].entries()) { k.budgetBuche(U, 'b' + i, 'pruefung', TAG, {}); k.budgetAbrechnen(U, 'b' + i, e, TAG, {}); }
-  const b = k.budgetBuche(U, 'c', 'pruefung', TAG, {});
+  k.budgetAbrechnen(U, 'a', 284, TAG, HART);
+  for (const [i, e] of [284, 300, 290].entries()) { k.budgetBuche(U, 'b' + i, 'pruefung', TAG, HART); k.budgetAbrechnen(U, 'b' + i, e, TAG, HART); }
+  const b = k.budgetBuche(U, 'c', 'pruefung', TAG, HART);
   assert.deepEqual([b.ok && b.betrag], [861], 'ab 3 Läufen: 3 × Median (284, 284, 290, 300 → 287)');
 });
 
 test('2b Abrechnung: Eimer bekommt die Differenz zurück', () => {
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
-  const vor = () => { const r = k.budgetBuche(U, 'p', 'bauer', TAG, {}); return r.ok ? r.betrag : -1; };
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
+  const vor = () => { const r = k.budgetBuche(U, 'p', 'bauer', TAG, HART); return r.ok ? r.betrag : -1; };
   assert.equal(vor(), 4500);
-  k.budgetAbrechnen(U, 'p', 500, TAG, {});
+  k.budgetAbrechnen(U, 'p', 500, TAG, HART);
   // 30000 − 4500 + 4000 zurück = 29500 → bis auf 500 Eimer leer buchbar: 6 × 4500 = 27000 passen, danach nicht mehr
-  let n = 0; while (k.budgetBuche(U, 'q' + n, 'bauer', TAG, {}).ok) n++;
+  let n = 0; while (k.budgetBuche(U, 'q' + n, 'bauer', TAG, HART).ok) n++;
   assert.equal(n, 6);
 });
 
 test('3 Airbag: Stand < 2× Boden pausiert Melious + Meldung; Hysterese; Breaker mit Backoff; kein Parken', () => {
   const m: string[] = []; k.budgetMelder((u, t) => m.push(`${u}:${t}`));
-  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG, {});   // < 2 × 51 200
-  const r = k.budgetBuche(U, 'a', 'bauer', TAG, {});
+  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG, HART);   // < 2 × 51 200
+  const r = k.budgetBuche(U, 'a', 'bauer', TAG, HART);
   assert.ok(!r.ok && /Airbag/.test(r.grund) && !r.claude, 'Bauer wartet, kein Claude');
   assert.equal(m.length, 1); assert.match(m[0], /^u1:Melious-Airbag/);
-  const d = k.budgetBuche(U, 'd', 'dringend', TAG, {});
+  const d = k.budgetBuche(U, 'd', 'dringend', TAG, HART);
   assert.ok(!d.ok && d.claude === true, 'nur Rang 0 darf auf Claude ausweichen');
   // Erholung erst ab 2,5× Boden (128 000)
-  k.budgetAnker(U, { stand: 110_000, echt: true }, TAG + 1000, {});
-  assert.match(k.budgetGrund(U, 'bauer', TAG + 1000, {}), /Airbag/);
-  k.budgetAnker(U, { stand: 200_000, echt: true }, TAG + 2000, {});
-  assert.equal(k.budgetGrund(U, 'bauer', TAG + 2000, {}), '');
+  k.budgetAnker(U, { stand: 110_000, echt: true }, TAG + 1000, HART);
+  assert.match(k.budgetGrund(U, 'bauer', TAG + 1000, HART), /Airbag/);
+  k.budgetAnker(U, { stand: 200_000, echt: true }, TAG + 2000, HART);
+  assert.equal(k.budgetGrund(U, 'bauer', TAG + 2000, HART), '');
   // Breaker: 5, 10, 20 min
-  assert.equal(k.budgetFehler(U, TAG, {}), TAG + 5 * 60_000);
-  assert.equal(k.budgetFehler(U, TAG, {}), TAG + 10 * 60_000);
-  assert.match(k.budgetGrund(U, 'bauer', TAG + 9 * 60_000, {}), /Breaker/);
-  assert.equal(k.budgetGrund(U, 'bauer', TAG + 11 * 60_000, {}), '');
-  const s = k.budgetBuche(U, 's', 'bauer', TAG + 11 * 60_000, {}); k.budgetAbrechnen(U, 's', 100, TAG + 11 * 60_000, {});
-  assert.equal(k.budgetFehler(U, TAG + 12 * 60_000, {}), TAG + 17 * 60_000, 'Erfolg setzt den Backoff zurück');
+  assert.equal(k.budgetFehler(U, TAG, HART), TAG + 5 * 60_000);
+  assert.equal(k.budgetFehler(U, TAG, HART), TAG + 10 * 60_000);
+  assert.match(k.budgetGrund(U, 'bauer', TAG + 9 * 60_000, HART), /Breaker/);
+  assert.equal(k.budgetGrund(U, 'bauer', TAG + 11 * 60_000, HART), '');
+  const s = k.budgetBuche(U, 's', 'bauer', TAG + 11 * 60_000, HART); k.budgetAbrechnen(U, 's', 100, TAG + 11 * 60_000, HART);
+  assert.equal(k.budgetFehler(U, TAG + 12 * 60_000, HART), TAG + 17 * 60_000, 'Erfolg setzt den Backoff zurück');
   assert.ok(s.ok);
 });
 
 test('4 Anker: echter Stand korrigiert die Schätzung; ohne Anker pessimistisch (×1,2, Boden 8 %)', () => {
-  const E = { BRIDGE_MELIOUS_NACHLADUNG: '0', BRIDGE_MELIOUS_BURST: '1e9' };
+  const E = { ...HART, BRIDGE_MELIOUS_NACHLADUNG: '0', BRIDGE_MELIOUS_BURST: '1e9' };
   const c = k.budgetCfg({});
   assert.ok(c.bodenOhneAnker > c.boden);
   // Schätzung 200 000, 40 000 verbraucht: ohne Anker ×1,2 → 152 000 < 2 × 81 920 → Airbag; mit Anker 160 000 > 2 × 51 200 → frei
@@ -93,19 +94,19 @@ test('5 Rangfolge 0–5 in der Schlange, innerhalb des Rangs nach Alter; Nachtmo
   process.env.BRIDGE_MELIOUS_BUDGET = 'aus';
   try { assert.equal(reihe(q, U, undefined, 50)[0].key, 'kosm', 'aus: alte Reihenfolge nach Alter'); } finally { delete process.env.BRIDGE_MELIOUS_BUDGET; }
   assert.ok(k.istNacht(NACHT, {}) && !k.istNacht(TAG, {}));
-  for (const t of ['dringend', 'bauer', 'pruefung'] as const) assert.equal(k.budgetGrund(U, t, NACHT, {}), '', t);
-  for (const t of ['lesen', 'zweitmeinung', 'kosmetik'] as const) assert.match(k.budgetGrund(U, t, NACHT, {}), /Nachtmodus/, t);
+  for (const t of ['dringend', 'bauer', 'pruefung'] as const) assert.equal(k.budgetGrund(U, t, NACHT, HART), '', t);
+  for (const t of ['lesen', 'zweitmeinung', 'kosmetik'] as const) assert.match(k.budgetGrund(U, t, NACHT, HART), /Nachtmodus/, t);
   assert.equal(k.budgetGrund(U, 'lesen', NACHT, { BRIDGE_MELIOUS_NACHT: 'aus' }), '');
 });
 
 test('5b Rang 0 nimmt die feste Reserve und weicht bei leerer Reserve als Einziger auf Claude aus', () => {
-  k.budgetAnker(U, { stand: 500_000, echt: true }, TAG, {});
-  while (k.budgetBuche(U, 'x' + Math.random(), 'bauer', TAG, {}).ok);   // Eimer leer
-  const d = k.budgetBuche(U, 'd1', 'dringend', TAG, {});
+  k.budgetAnker(U, { stand: 500_000, echt: true }, TAG, HART);
+  while (k.budgetBuche(U, 'x' + Math.random(), 'bauer', TAG, HART).ok);   // Eimer leer
+  const d = k.budgetBuche(U, 'd1', 'dringend', TAG, HART);
   assert.ok(d.ok && d.aus === 'reserve');
-  const b = k.budgetBuche(U, 'b1', 'bauer', TAG, {});
+  const b = k.budgetBuche(U, 'b1', 'bauer', TAG, HART);
   assert.ok(!b.ok && !b.claude);
-  let r; for (let i = 0; i < 10; i++) r = k.budgetBuche(U, 'd' + (i + 2), 'dringend', TAG, {});
+  let r; for (let i = 0; i < 10; i++) r = k.budgetBuche(U, 'd' + (i + 2), 'dringend', TAG, HART);
   assert.ok(r && !r.ok && r.claude === true, 'Reserve leer → Claude-Fallback nur für Rang 0');
 });
 
@@ -136,11 +137,11 @@ test('7 Täglicher Abgleich 08:00: Verbrauch > Nachladung → Alarm und −20 %,
 
 test('Zulassung im Strang-Gate: Budget statt fester Notgrenze; Schalter aus → unverändert', () => {
   const o = { neu: false, bauend: true, userId: U, jobtyp: 'bauer' as const, jetzt: NACHT };
-  assert.equal(k.kapazitaetGrund(lage({ unterBoden: true }), { ...o, jetzt: TAG }, {}), '', 'unterBoden-Flag allein sperrt nicht mehr, wenn das Budget entscheidet');
-  assert.match(k.kapazitaetGrund(lage({ stand: 90_000 }), { ...o, jetzt: TAG }, {}), /Airbag/);
+  assert.equal(k.kapazitaetGrund(lage({ unterBoden: true }), { ...o, jetzt: TAG }, HART), '', 'unterBoden-Flag allein sperrt nicht mehr, wenn das Budget entscheidet');
+  assert.match(k.kapazitaetGrund(lage({ stand: 90_000 }), { ...o, jetzt: TAG }, HART), /Airbag/);
   k.budgetVergessen();
   assert.match(k.kapazitaetGrund(lage({ unterBoden: true }), { ...o, jetzt: TAG }, { BRIDGE_MELIOUS_BUDGET: 'aus' }), /Notgrenze/);
-  assert.match(k.kapazitaetGrund(lage(), { ...o, jobtyp: 'lesen' }, {}), /Nachtmodus/);
+  assert.match(k.kapazitaetGrund(lage(), { ...o, jobtyp: 'lesen' }, HART), /Nachtmodus/);
 });
 
 // ---- Folgeschritt: Persistenz, Ränge mit Quelle, Airbag-Kanal ----
@@ -148,45 +149,45 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const leerBuchen = (t: number, pre = 'x') => { let n = 0; while (k.budgetBuche(U, pre + n, 'bauer', t, {}).ok) n++; return n; };
+const leerBuchen = (t: number, pre = 'x') => { let n = 0; while (k.budgetBuche(U, pre + n, 'bauer', t, HART).ok) n++; return n; };
 
 test('Persistenz: Neustart-Simulation — Eimer nicht voll, lädt ab gespeichertem Stand nach; Breaker, Ledger, Faktor bleiben', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
   k.budgetPersistenz(f);
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
   assert.equal(leerBuchen(TAG), 3, 'neue Datei = pessimistischer Start: 15 000 / 4 500');
-  for (let i = 0; i < 3; i++) { k.budgetAbrechnen(U, 'x' + i, 1_500, TAG, {}); k.budgetAbrechnen(U, 'd' + i, 3_000, TAG, {}); }   // abgerechnet + direkt belastet: eimer wie vorher leer, nichts offen (offene Buchungen überleben den Neustart und liefen nach 30 min zurück)
-  for (const [i, e] of [280, 290, 300].entries()) { k.budgetBuche(U, 'l' + i, 'pruefung', TAG, {}); k.budgetAbrechnen(U, 'l' + i, e, TAG, {}); }
-  const bis = k.budgetFehler(U, TAG, {});
+  for (let i = 0; i < 3; i++) { k.budgetAbrechnen(U, 'x' + i, 1_500, TAG, HART); k.budgetAbrechnen(U, 'd' + i, 3_000, TAG, HART); }   // abgerechnet + direkt belastet: eimer wie vorher leer, nichts offen (offene Buchungen überleben den Neustart und liefen nach 30 min zurück)
+  for (const [i, e] of [280, 290, 300].entries()) { k.budgetBuche(U, 'l' + i, 'pruefung', TAG, HART); k.budgetAbrechnen(U, 'l' + i, e, TAG, HART); }
+  const bis = k.budgetFehler(U, TAG, HART);
   assert.ok(existsSync(f));
   // Neustart: Zustand im Speicher weg, Datei bleibt
   k.budgetPersistenz(f);
-  assert.equal(k.budgetGrund(U, 'bauer', TAG, {}).slice(0, 14), 'wartet: Energi', 'direkt nach dem Neustart nicht voll (Breaker oder leerer Eimer)');
+  assert.equal(k.budgetGrund(U, 'bauer', TAG, HART).slice(0, 14), 'wartet: Energi', 'direkt nach dem Neustart nicht voll (Breaker oder leerer Eimer)');
   k.budgetPersistenz(f);   // Breaker überstanden: 1 h später → 8 000 nachgeladen, nicht 30 000
   assert.equal(leerBuchen(TAG + H, 'y'), 1, '8 000 + Rest → ein Bauer-Job (4 500), kein voller Burst');
   k.budgetPersistenz(f);
-  const b = k.budgetBuche(U, 'm', 'pruefung', TAG + H, {});
+  const b = k.budgetBuche(U, 'm', 'pruefung', TAG + H, HART);
   assert.ok(b.ok && b.betrag === 3 * 290, 'Ledger-Median überlebt (280, 290, 300 → 290)');
   assert.ok(bis > TAG);
   k.budgetPersistenz(f);
-  assert.match(k.budgetGrund(U, 'bauer', TAG + 60_000, {}), /Breaker|Energie-Budget/);
+  assert.match(k.budgetGrund(U, 'bauer', TAG + 60_000, HART), /Breaker|Energie-Budget/);
 });
 
 test('Persistenz: offene Buchung überlebt den Neustart — Freigeben erstattet', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
   k.budgetPersistenz(f);
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
-  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, {}).ok);      // 15 000 − 4 500 = 10 500
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
+  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, HART).ok);      // 15 000 − 4 500 = 10 500
   k.budgetPersistenz(f);                                        // Neustart
-  k.budgetFreigeben(U, 's1', TAG, {});
+  k.budgetFreigeben(U, 's1', TAG, HART);
   assert.equal(leerBuchen(TAG, 'z'), 3, 'erstattet: wieder 15 000 / 4 500');
 });
 
 test('Persistenz: offene Buchung nach Neustart und BUCHUNG_LEBEN_MS → Ablaufpfad erstattet', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
   k.budgetPersistenz(f);
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
-  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, {}).ok);
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
+  assert.ok(k.budgetBuche(U, 's1', 'bauer', TAG, HART).ok);
   k.budgetPersistenz(f);
   assert.equal(leerBuchen(TAG + 31 * 60_000, 'z'), 4, '10 500 + 4 133 Nachladung + 4 500 erstattet → 4 Bauer-Jobs, sonst 3');
 });
@@ -194,11 +195,11 @@ test('Persistenz: offene Buchung nach Neustart und BUCHUNG_LEBEN_MS → Ablaufpf
 test('Persistenz: Datei ohne offen lädt (abwärtskompatibel)', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
   k.budgetPersistenz(f);
-  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, {});
+  k.budgetAnker(U, { stand: 243_000, echt: true }, TAG, HART);
   const j = JSON.parse(readFileSync(f, 'utf8')); delete j.zustaende[U].offen; writeFileSync(f, JSON.stringify(j));
   k.budgetPersistenz(f);
-  assert.doesNotThrow(() => k.budgetFreigeben(U, 'nix', TAG, {}));
-  assert.equal(k.budgetBuche(U, 'a', 'pruefung', TAG, {}).ok, true);
+  assert.doesNotThrow(() => k.budgetFreigeben(U, 'nix', TAG, HART));
+  assert.equal(k.budgetBuche(U, 'a', 'pruefung', TAG, HART).ok, true);
 });
 
 test('Persistenz: fehlende oder kaputte Datei → pessimistischer Start (halber Burst)', () => {
@@ -234,11 +235,11 @@ test('Ränge mit Quelle: 0 dringend (Markierung), 1 Bauer und Schreiber, 3 Lesen
 
 test('Airbag-Meldung: einmal je Auslösung (nicht je Tick), erneut erst nach Erholung', () => {
   const m: string[] = []; k.budgetMelder((_u, _t, art) => m.push(art));
-  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG, {});
-  for (let i = 0; i < 5; i++) k.budgetGrund(U, 'bauer', TAG + i * 1000, {});
+  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG, HART);
+  for (let i = 0; i < 5; i++) k.budgetGrund(U, 'bauer', TAG + i * 1000, HART);
   assert.deepEqual(m, ['airbag']);
-  k.budgetAnker(U, { stand: 300_000, echt: true }, TAG + 10_000, {}); k.budgetGrund(U, 'bauer', TAG + 10_000, {});
-  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG + 20_000, {}); k.budgetGrund(U, 'bauer', TAG + 20_000, {});
+  k.budgetAnker(U, { stand: 300_000, echt: true }, TAG + 10_000, HART); k.budgetGrund(U, 'bauer', TAG + 10_000, HART);
+  k.budgetAnker(U, { stand: 90_000, echt: true }, TAG + 20_000, HART); k.budgetGrund(U, 'bauer', TAG + 20_000, HART);
   assert.deepEqual(m, ['airbag', 'airbag'], 'zweite Auslösung nach Erholung');
 });
 
@@ -339,14 +340,25 @@ test('Echter Zug: Vorabbuchung und Werkbank-Abrechnung treffen sich — Ledger w
 test('Persistenz: Speichern durch Person B verliert die geladene, noch nicht angefasste Person A nicht', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'budget-')), 'melious-budget.json');
   k.budgetPersistenz(f);
-  k.budgetAnker('A', { stand: 243_000, echt: true }, TAG, {});
-  k.budgetAnker('B', { stand: 243_000, echt: true }, TAG, {});
-  const bis = k.budgetFehler('A', TAG, {});
+  k.budgetAnker('A', { stand: 243_000, echt: true }, TAG, HART);
+  k.budgetAnker('B', { stand: 243_000, echt: true }, TAG, HART);
+  const bis = k.budgetFehler('A', TAG, HART);
   k.budgetPersistenz(f);                         // Neustart: A und B nur in `geladen`, noch nicht instanziiert
-  k.budgetFehler('B', TAG, {});                  // nur B wird angefasst → speichern()
+  k.budgetFehler('B', TAG, HART);                  // nur B wird angefasst → speichern()
   const j = JSON.parse(readFileSync(f, 'utf8'));
   assert.ok(j.zustaende.A, 'A steht noch in der Datei');
   assert.equal(j.zustaende.A.breakerBis, bis);
   k.budgetPersistenz(f);                         // und nach erneutem Neustart wirkt A's Breaker noch
-  assert.match(k.budgetGrund('A', 'bauer', TAG + 60_000, {}), /Breaker|Energie-Budget/);
+  assert.match(k.budgetGrund('A', 'bauer', TAG + 60_000, HART), /Breaker|Energie-Budget/);
+});
+
+test('10 weich (Standard, Knut 09.11.): Eimer, Airbag und Nacht sperren nicht; Breaker nur für Melious-Läufe; Claude-Züge nie', () => {
+  for (let i = 0; i < 20; i++) assert.ok(k.budgetBuche(U, 'w' + i, 'bauer', TAG, {}).ok, 'leerer Eimer bucht weiter');
+  assert.equal(k.budgetGrund(U, 'kosmetik', NACHT, {}), '', 'Nachtmodus hält weich nichts an');
+  k.budgetFehler(U, TAG, {});
+  assert.match(k.budgetGrund(U, 'bauer', TAG + 1000, {}), /Breaker/, 'echte 402 bleibt eine Sperre');
+  const opt = { neu: false, bauend: true, userId: U, jobtyp: 'pruefung' as const, jetzt: TAG + 1000 };
+  assert.equal(k.kapazitaetGrund(lage(), { ...opt, claude: true }, {}), '', 'Claude-Zug startet trotz Breaker');
+  assert.match(k.kapazitaetGrund(lage(), { ...opt, claude: false }, {}), /Breaker/, 'Melious-Lauf wartet');
+  assert.match(k.kapazitaetGrund(lage(), { ...opt, claude: true }, HART), /Breaker/, 'hart: alte Sperre auch für Claude');
 });

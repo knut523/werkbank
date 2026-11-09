@@ -27,7 +27,9 @@ export function kapazitaetGrund(k: Kapazitaet | null, o: { neu: boolean; bauend:
   // Paket E: Claude-Budget je Konto (Eimer, Wand, Tempo, Hauptchat-Tag) — nur für Läufe auf Claude.
   const cb = claudeBudgetGrund(o, o.jetzt ?? Date.now(), env); if (cb && o.claude !== false) return cb;
   // Paket D: mit Jobtyp entscheidet das Budget (Eimer, Nachtmodus, Airbag, Breaker) statt der festen Notgrenze; der Anker kommt aus der Lage.
-  const budget = !!o.userId && !!o.jobtyp && budgetAn(env);
+  // Weich (Standard): das Melious-Budget hält nur Läufe an, die selbst auf Melious laufen — nie einen Claude-Zug (09.11.: Abgleich und
+  // Pass A der PR-Reviews hingen 1 h am Melious-Eimer, obwohl sie Claude-Turns waren).
+  const budget = !!o.userId && !!o.jobtyp && budgetAn(env) && (budgetHart(env) || o.claude === false);
   if (budget) {
     budgetAnker(o.userId!, { stand: k.stand, echt: k.echt === true, topf: k.topfMax }, o.jetzt ?? Date.now(), env);
     const g = budgetGrund(o.userId!, o.jobtyp!, o.jetzt ?? Date.now(), env);
@@ -71,6 +73,9 @@ export const kapazitaetVergessen = () => { lage.clear(); laedt.clear(); };
 // ---------------------------------------------------------------------------------------------------------------------------
 type Env = Record<string, string | undefined>;
 export const budgetAn = (env: Env = process.env) => String(env.BRIDGE_MELIOUS_BUDGET ?? '').trim().toLowerCase() !== 'aus';
+/** Knut 09.11.: „mach Melious-Budget halt nicht als harte Sperre“. Standard `weich`: Eimer, Airbag und Nachtmodus buchen nur mit und
+ *  halten nichts an; hart bleibt nur der Breaker (Melious hat wirklich 402 gesagt), und der nur für Läufe auf Melious. `hart` = alte Sperre. */
+export const budgetHart = (env: Env = process.env) => String(env.BRIDGE_MELIOUS_BUDGET ?? '').trim().toLowerCase() === 'hart';
 const zahl = (v: unknown, d: number, min = 0) => { const s = String(v ?? '').trim(), n = Number(s); return s !== '' && Number.isFinite(n) && n >= min ? n : d; };
 
 export const RANG = { dringend: 0, bauer: 1, pruefung: 2, lesen: 3, zweitmeinung: 4, kosmetik: 5 } as const;
@@ -219,8 +224,11 @@ function pruefe(userId: string, jobtyp: Jobtyp, now: number, env: Env): { z: Zus
   const rang = RANG[jobtyp], betrag = Math.min(buchungsBetrag(z, jobtyp), c.burst);
   // Kein Rückfall auf Claude außer Rang 0: die anderen warten (sichtbar), Rang 0 darf ausweichen.
   const nein = (grund: string): Zulassung => (rang === 0 ? { ok: false, grund, claude: true } : { ok: false, grund });
-  if (rang > 2 && istNacht(now, env)) return { z, c, betrag, r: { ok: false, grund: 'wartet: Nachtmodus 22–06 Uhr — nur Rang 0–2, die Nachladung bleibt im Topf' } };
+  // Weich: nur der Breaker (echte 402) hält an — die Schätzungen (Nacht, Airbag, Eimer) sind keine Sperre mehr.
+  const hart = budgetHart(env);
+  if (hart && rang > 2 && istNacht(now, env)) return { z, c, betrag, r: { ok: false, grund: 'wartet: Nachtmodus 22–06 Uhr — nur Rang 0–2, die Nachladung bleibt im Topf' } };
   if (z.breakerBis > now) return { z, c, betrag, r: nein(`wartet: Energie-Breaker offen (402) — nächster Versuch ${new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(z.breakerBis)}`) };
+  if (!hart) return { z, c, betrag, r: null };
   if (z.pause) return { z, c, betrag, r: nein('wartet: Energie-Airbag — geschätzter Stand unter 2× Boden, Melious pausiert') };
   if (rang === 0 && z.reserve >= betrag) return { z, c, betrag, r: null };
   if (z.eimer >= betrag) return { z, c, betrag, r: null };
