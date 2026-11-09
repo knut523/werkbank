@@ -7,8 +7,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify, parseAnswer, jiraWriteKeys, confirmQuestion, statusLine } from '../src/tools.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3098;
+const [PORT] = await freiePorts(1);
 let proc: ChildProcess;
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-'));

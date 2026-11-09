@@ -7,8 +7,9 @@ import { mkdtempSync, realpathSync, mkdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3497;
+const [PORT] = await freiePorts(1);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-abbrechen-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-abbrechen-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-abbrechen-'));

@@ -9,8 +9,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pickAccounts, balance, fp, type Account } from '../src/accounts.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3094;
+const [PORT] = await freiePorts(1);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-acct-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-acct-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-acct-'));
