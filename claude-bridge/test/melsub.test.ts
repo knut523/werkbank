@@ -8,8 +8,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { auslastungAus, auslastungZeile } from '../src/auslastung.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3496;
+const [PORT] = await freiePorts(1);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-melsub-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-melsub-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-melsub-'));

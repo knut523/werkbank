@@ -9,8 +9,9 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3395;
+const [PORT] = await freiePorts(1);
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-melstub-'));
 const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'orch-melstub-')));
 mkdirSync(join(STATE, 'scratch', 'fremd'), { recursive: true });
