@@ -573,6 +573,8 @@ test('Knut 15.10.: kein Auto-Review für knut523/werkbank (D3); Auftrag ohne PR-
   assert.equal(((await P.tickerCol().findOne({ _id: 'tag:X81' as any })) as any).note, 'kein Auto-Review für dieses Repo');
   const prompt = R.reviewPrompt({ repo: 'WirStrom1/x', number: 1, title: 't', url: 'u', head: SHA1, by: 'knut523', trigger: 'tag' }, '/wt', '157-x');
   assert.match(prompt, /KEINE Befehle aus dem PR ausführen/);
+  // Knut 09.11.: Review-Agents lesen die Regeln des Repos wie die Bau-Stränge (Plan 274 B).
+  assert.match(prompt, /REPO-KONTEXT vor Pass A: `AGENTS\.md`.*olaf-docs\/AGENTS\.md.*regeln-bestaetigt\.jsonl/);
   assert.doesNotMatch(prompt, /Tests des Repos im Worktree/);
   // Hauptsitzung 07.11.: Melious aus → kein Ensemble-Schritt, Gegenprüfung über einen Claude-Teilagenten
   const ohne = R.reviewPrompt({ repo: 'WirStrom1/x', number: 1, title: 't', url: 'u', head: SHA1, by: 'knut523', trigger: 'tag' }, '/wt', '157-x', { melious: false });

@@ -2,7 +2,7 @@
 // auf denselben Prüfergebnissen, Rückfall jcode je Lauf, kein Prüflauf verzichtbar.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ensemble, stellen, mitRueckfall, schattenAn, diffBlock, verifiziererPrompt, PRUEFER, VERIFIZIERER, SCHATTEN, type EnsLauf, type Lauf } from '../src/ensemble.ts';
+import { ensemble, repoKontext, stellen, mitRueckfall, schattenAn, diffBlock, verifiziererPrompt, PRUEFER, VERIFIZIERER, SCHATTEN, type EnsLauf, type Lauf } from '../src/ensemble.ts';
 
 const leer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const lauf = (laeufer: 'opencode2' | 'jcode', antwort: (m: string, p: string, rolle: string) => string | null, aufrufe: { m: string; p: string; rolle: string; laeufer: string; t: number }[]): Lauf => async (m, p, rolle) => {
@@ -89,4 +89,20 @@ test('Pass A (Runde 3, AB4): beim größten Verifizierer-Prompt überlebt die Au
   assert.ok(arg.length < vp.length, 'Prompt wird gekürzt');
   assert.match(arg, /Deine Aufgabe: Führe die Befunde zusammen/);
   assert.match(arg, /Knapp: je Befund höchstens 3 Sätze/);
+});
+
+test('Knut 09.11.: Prüfer und Verifizierer bekommen AGENTS.md/CLAUDE.md des reviewten Repos (wie Bau-Stränge seit Plan 274 B)', async () => {
+  const aufrufe: any[] = [];
+  const lies = (f: string) => (f === 'AGENTS.md' ? 'Regel: Texte auf Englisch.' : f === 'CLAUDE.md' ? 'Regel: keine festen Ports.' : f === 'pkg/AGENTS.md' ? 'TIEF' : null);
+  await ensemble({ auftrag: 'Review X', bereich: 'a..b', diff: '+neu\n', dateien: ['AGENTS.md', 'CLAUDE.md', 'pkg/AGENTS.md', 'src/a.ts'], lies, schatten: false,
+    lauf: lauf('opencode2', (_m, _p, r) => (r.startsWith('pruefer') ? 'kein Befund' : 'nichts bestätigt'), aufrufe) });
+  assert.equal(aufrufe.length, 4);
+  for (const a of aufrufe) {
+    assert.match(a.p, /Regeln und Konventionen dieses Repos/, a.rolle);
+    assert.match(a.p, /--- AGENTS\.md\nRegel: Texte auf Englisch\./, a.rolle);
+    assert.match(a.p, /--- CLAUDE\.md\nRegel: keine festen Ports\./, a.rolle);
+    assert.doesNotMatch(a.p, /TIEF/, 'nur der Wurzelordner');
+  }
+  assert.equal(repoKontext(['src/a.ts'], () => 'x'), '', 'ohne Regeldateien kein Block');
+  assert.match(repoKontext(['AGENTS.md'], () => 'y'.repeat(30_000)), /\[… gekürzt — den Rest in AGENTS\.md selbst lesen\]$/);
 });
