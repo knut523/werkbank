@@ -51,3 +51,27 @@ test('Defekt A: bedingtes Überspringen zur Laufzeit ohne Marker bleibt grün (#
   assert.match(r.stdout, /ok +pkg\/a\.test\.mjs: pass=1/);
 });
 
+
+// Opus-Endprüfung 09.11.: eine umbenannte UND geänderte Testdatei erschien als R und fiel aus allen Listen (c, d, „gelöscht“).
+test('Umbenannte und geänderte Testdatei fällt nicht durch: gilt als gelöscht + neu (rot), die neue Datei läuft in c', () => {
+  const alt = "import { test } from 'node:test';\nimport assert from 'node:assert';\ntest('a', () => { assert.ok(1); });\ntest('b', () => { assert.ok(2); });\ntest('c', () => { assert.ok(3); });\n";
+  const neu = "import { test } from 'node:test';\nimport assert from 'node:assert';\ntest('a', () => { assert.ok(1); });\ntest('b', () => { });\ntest('c', () => { assert.ok(3); });\n";
+  const { d, base } = repo({ 'pkg/b.test.mjs': neu }, { 'pkg/a.test.mjs': alt }, ['pkg/a.test.mjs']);
+  const r = gate(d, base); rmSync(d, { recursive: true, force: true });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /RED +test file deleted: pkg\/a\.test\.mjs/);
+  assert.match(r.stdout, /ok +pkg\/b\.test\.mjs: pass=3/);
+});
+
+// Opus-Endprüfung 09.11.: t.skip( im Testkörper, await test.skip(, Leerzeichen vor der Klammer wurden nicht mehr erkannt.
+test('Check d: t.skip/t.todo im Testkörper, await test.skip( und test (…, { skip }) sind rot; als Zeichenkette grün', () => {
+  const alt = PASS + "test('b', (t) => {\n  const x = 1;\n});\n";
+  for (const zeile of ["  t.skip('x'); return;", "  t.todo();", "await test.skip('q', () => {});", "test ('r', { skip: true }, () => {});", "test('s', (t) => { t.skip(); });"]) {
+    const { d, base } = repo({ 'pkg/a.test.mjs': alt.replace('  const x = 1;', '  const x = 1;\n' + zeile) }, { 'pkg/a.test.mjs': alt });
+    const r = gate(d, base); rmSync(d, { recursive: true, force: true });
+    assert.match(r.stdout, /RED +pkg\/a\.test\.mjs: skip\/only\/todo marker added/, zeile + '\n' + r.stdout);
+  }
+  const { d, base } = repo({ 'pkg/a.test.mjs': alt.replace('  const x = 1;', "  const x = 1;\n  const hilfe = 'nutze t.skip() nur mit Grund';") }, { 'pkg/a.test.mjs': alt });
+  const r = gate(d, base); rmSync(d, { recursive: true, force: true });
+  assert.equal(r.status, 0, r.stdout);
+});

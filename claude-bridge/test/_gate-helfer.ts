@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 export const SCRIPTS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
 export const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 
-export function repo(files: Record<string, string>, extraBase: Record<string, string> = {}) {
+export function repo(files: Record<string, string>, extraBase: Record<string, string> = {}, weg: string[] = []) {
   const d = mkdtempSync(join(tmpdir(), 'abnahme-gate-'));
   mkdirSync(join(d, 'scripts'));
   for (const f of ['abnahme.sh', 'sauber-env.sh', 'secret-env.pattern', 'drop-env.names']) if (existsSync(join(SCRIPTS, f))) copyFileSync(join(SCRIPTS, f), join(d, 'scripts', f));
@@ -17,6 +17,7 @@ export function repo(files: Record<string, string>, extraBase: Record<string, st
   const put = (m: Record<string, string>) => { for (const [p, c] of Object.entries(m)) { mkdirSync(join(d, dirname(p)), { recursive: true }); writeFileSync(join(d, p), c); } };
   put({ 'README.md': 'x\n', ...extraBase }); git(d, 'add', '-A'); git(d, 'commit', '-qm', 'base');
   const base = git(d, 'rev-parse', 'HEAD');
+  for (const p of weg) git(d, 'rm', '-q', p);
   put(files); git(d, 'add', '-A'); git(d, 'commit', '-qm', 'head');
   return { d, base };
 }
