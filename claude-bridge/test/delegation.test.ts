@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, realpathSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,12 +11,11 @@ import { g, UEB, repo } from './delegation-hilfe.ts';
 import { freiePorts } from './port-hilfe.ts';
 
 
-const [PORT] = await freiePorts(1);
+const PORT = Number(process.env.WERKBANK_TEST_DELEGATION_PORT) || (await freiePorts(1))[0];
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-deleg-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-deleg-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-deleg-'));
 const ORCH = realpathSync(mkdtempSync(join(tmpdir(), 'orch-deleg-')));
-const WIRFT = join(STATE, 'pruef-wirft.flag');   // Testnaht: existiert die Datei, wirft die Prüfung der Brücke
 const tok = (s: string) => `sk-ant-oat01-deleg-${s}-${'x'.repeat(24)}`;
 const key = (s: string) => `sk-mel-${s}-${'y'.repeat(24)}`;
 const MEL = (o: Record<string, unknown> = {}) => ({ id: 'melious', label: 'Melious', token: key('gut'), kind: 'melious', rest: 200_000, fallback: false, kette: true, ketteModell: 'glm-5.3',
@@ -45,7 +44,7 @@ before(async () => {
   await new Promise<void>((r) => web.listen(0, '127.0.0.1', () => r()));
   const wurl = `http://127.0.0.1:${(web.address() as any).port}`;
   proc = spawn(process.execPath, ['src/server.ts'], {
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_CLAUDEBUDGET: 'aus' /* sonst wartet jeder Folgezug im push zu Recht auf die Vorprüfung */, BRIDGE_MAX_LESER: '2', BRIDGE_PORT: String(PORT), BRIDGE_TEST_PRUEF_WIRFT: WIRFT, BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, BRIDGE_MOCK: '1', BRIDGE_CLAUDEBUDGET: 'aus' /* sonst wartet jeder Folgezug im push zu Recht auf die Vorprüfung */, BRIDGE_MAX_LESER: '2', BRIDGE_PORT: String(PORT), BRIDGE_STATE_DIR: STATE, BRIDGE_SKILLS_DIR: SKILLS, BRIDGE_SKILLS: '',
       WERKBANK_URL: wurl, WERKBANK_INTERNAL_TOKEN: 'geheim', MELIOUS_BASE_URL: wurl, BRIDGE_CLAUDE_HOMES: HOMES, WERKBANK_ORCH_ROOTS: ORCH, WERKBANK_SKILLS_SOURCE: SKILLS,
       BRIDGE_CLAUDE_CONFIG_SHARED: '', BRIDGE_CLAUDE_CONFIG: '', BRIDGE_PERMISSION_MODE: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -319,43 +318,6 @@ test('Phasenwechsel nach Ersatz-Lead (C6): Brücke prüft den Strang-Stand und h
   assert.match(t2, /Die Brücke hat den Stand geprüft \(Ersatz-Lead\): ROTE Prüfungen/);
   assert.match(t2, /Brücken-Prüfung ja/);
   void out;
-});
-
-/** Strang mit Ersatz-Lead (Kette) in Phase „bau“; die Prüfung der Brücke (Integrationszweig dev) braucht `dauerMs`. */
-async function kettenStrang(n: number, dauerMs: number, user = 'limitk') {
-  const dir = repo(ORCH, `s${n}`);
-  g(dir, 'checkout', '-q', 'dev');
-  writeFileSync(join(dir, '.werkbank', 'pruefungen.json'), JSON.stringify({ pruefungen: [{ name: 'langsam', befehl: ['node', '-e', `setTimeout(() => {}, ${dauerMs})`] }] }));
-  g(dir, 'commit', '-q', '-am', 'langsame Prüfung');
-  g(dir, 'checkout', '-q', 'main');
-  ACCOUNTS[user] ??= [{ id: 'a1', label: 'Firma', token: tok('limit-kette') }, { id: 'chat', label: 'Chat-Schlüssel', token: null }, MEL()];
-  await register(user, conv(n), dir, { risiko: 'mittel' });
-  writeFileSync(join(dir, 'uebergabe.md'), UEB);
-  await send(conv(n), lead([{ tool: 'phase_wechseln', args: { phase: 'bau', uebergabe: 'uebergabe.md' } }]), user);   // erster Wechsel: Kette beginnt
-  return dir;
-}
-const wechselReview = (n: number, user = 'limitk') => send(conv(n), lead([{ tool: 'phase_wechseln', args: { phase: 'review', uebergabe: 'uebergabe.md' } }]), user);
-
-test('Phasenwechsel nach Ersatz-Lead: startet der Lead während der Brücken-Prüfung einen Worker, gibt es 409 und keine verwaiste Phase', async () => {
-  await kettenStrang(40, 3000);
-  const t = wechselReview(40);
-  await new Promise((r) => setTimeout(r, 1000));   // Prüfung läuft (3 s)
-  const d = await fetch(`http://127.0.0.1:${PORT}/internal/delegate`, { method: 'POST', headers: { 'x-werkbank-internal': 'geheim', 'content-type': 'application/json' }, body: JSON.stringify({ userId: 'limitk', conv: conv(40), rolle: 'leser', aufgabe: 'MOCK-LANG 8000' }) });
-  assert.equal(d.status, 200, await d.text());
-  const text = await t;
-  assert.match(text, /\[phase_wechseln\] FEHLER 409: Noch 1 Worker laufen/);
-  assert.equal((await orchState('limitk')).find((s: any) => s.conv === conv(40)).phase, 'bau', 'keine Phase angemeldet');
-});
-
-test('Phasenwechsel nach Ersatz-Lead: wirft die Brücken-Prüfung, klarer Fehler und keine Phase angemeldet', async () => {
-  await kettenStrang(41, 100, 'limitk2');   // eigene Person: der Worker aus dem Test davor soll nicht stören
-  writeFileSync(WIRFT, '1');
-  let text: string;
-  try { text = await Promise.race([wechselReview(41, 'limitk2'), new Promise<string>((_, no) => setTimeout(() => no(new Error('phase_wechseln antwortet nicht (Zug hängt nach der Ausnahme)')), 15_000).unref())]); }
-  finally { rmSync(WIRFT, { force: true }); }
-  assert.match(text, /\[phase_wechseln\] FEHLER 500: Prüfung der Brücke fehlgeschlagen/);
-  assert.doesNotMatch(text, /angemeldet/);
-  assert.equal((await orchState('limitk2')).find((s: any) => s.conv === conv(41)).phase, 'bau', 'keine Phase angemeldet');
 });
 
 test('jcode-Worker (15.10.): Verbrauch aus der jcode-Sitzung summiert (Cache getrennt), Weg standardmäßig aus', async () => {

@@ -8,8 +8,9 @@ import { mkdtempSync, realpathSync, writeFileSync, chmodSync, mkdirSync, readFil
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3493;
+const PORT = Number(process.env.WERKBANK_TEST_ENSEMBLE_PORT) || (await freiePorts(1))[0];
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-ens-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-ens-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-ens-'));
