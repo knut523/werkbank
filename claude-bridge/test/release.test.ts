@@ -4,13 +4,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, realpathSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { releaseMerge, releaseWorktreeProblem, RELEASE_BLOCK } from '../src/tools.ts';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3477;
+const [PORT] = await freiePorts(1);   // freier Port je Lauf (ports-p5), nichts fest verdrahtet
 const MAIL = 'rel@maxenergy.at';
 const INTERNAL = 'test-intern-' + randomUUID();
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), 'rel-roots-')));
@@ -109,4 +110,12 @@ test('inbox_antworten (Walkthrough 221, „Anders“ im Chat): nur der Hauptchat
   assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'anders', text: 'x' }).cls, 'blocked');
   assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'ja' }, { leit: true }).cls, 'confirm');
   assert.equal(classify('mcp__werkbank__inbox_antworten', { kennung: 'q-1', antwort: 'ja' }, { leit: true, workDir: '/tmp', scope: 'voll' } as any).cls, 'auto');
+});
+
+// ports-p5: feste Testports waren im Parallelauf rot (ein fremder Dienst auf dem Port antwortet für die Testbrücke).
+// Diese Datei nimmt ihren Port aus freiePorts(); der Wächter hält das fest.
+test('keine feste Portnummer in dieser Datei (ports-p5)', () => {
+  const quelle = readFileSync(new URL('./release.test.ts', import.meta.url), 'utf8');
+  assert.match(quelle, /await freiePorts\(/, 'Ports kommen aus freiePorts');
+  assert.doesNotMatch(quelle, /PORT\s*=\s*[0-9]{4,5}|\|\| ?[0-9]{4,5}[^0-9]|port[s]?:\s*[0-9]{4,5}/, 'feste Portnummer');
 });

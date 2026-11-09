@@ -9,8 +9,9 @@ import { mkdtempSync, realpathSync, writeFileSync, chmodSync, mkdirSync, readFil
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { freiePorts } from './port-hilfe.ts';
 
-const PORT = 3497, OC2_PORT = 47871;
+const [PORT, OC2_PORT] = await freiePorts(2);   // freie Ports je Lauf (ports-p5), nichts fest verdrahtet
 const STATE = mkdtempSync(join(tmpdir(), 'bridge-oc2s-'));
 const HOMES = mkdtempSync(join(tmpdir(), 'claude-homes-oc2s-'));
 const SKILLS = mkdtempSync(join(tmpdir(), 'skills-oc2s-'));
@@ -144,6 +145,14 @@ test('Gate: GLM baut, Claude lehnt ab → Befunde an DIESELBE Sitzung → ok; zw
     assert.match(t2, /Nachricht 3/); assert.doesNotMatch(t2, /Claude-Gate/);
     void st;
   } finally { await stop(); }
+});
+
+// ports-p5: feste Testports waren im Parallelauf rot (ein fremder Dienst auf dem Port antwortet für die Testbrücke).
+// Diese Datei nimmt ihre Ports aus freiePorts(); der Wächter hält das fest.
+test('keine feste Portnummer in dieser Datei (ports-p5)', () => {
+  const quelle = readFileSync(new URL('./oc2-basis.test.ts', import.meta.url), 'utf8');
+  assert.match(quelle, /await freiePorts\(/, 'Ports kommen aus freiePorts');
+  assert.doesNotMatch(quelle, /PORT\s*=\s*[0-9]{4,5}|\|\| ?[0-9]{4,5}[^0-9]|port[s]?:\s*[0-9]{4,5}/, 'feste Portnummer');
 });
 
 test('Melious unter der Untergrenze: kein OC2-Zug, Claude mit Grund', async () => {
