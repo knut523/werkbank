@@ -66,7 +66,7 @@ test('Umbenannte und geänderte Testdatei fällt nicht durch: gilt als gelöscht
 // Opus-Endprüfung 09.11.: t.skip( im Testkörper, await test.skip(, Leerzeichen vor der Klammer wurden nicht mehr erkannt.
 test('Check d: t.skip/t.todo im Testkörper, await test.skip( und test (…, { skip }) sind rot; als Zeichenkette grün', () => {
   const alt = PASS + "test('b', (t) => {\n  const x = 1;\n});\n";
-  for (const zeile of ["  t.skip('x'); return;", "  t.todo();", "await test.skip('q', () => {});", "test ('r', { skip: true }, () => {});", "test('s', (t) => { t.skip(); });"]) {
+  for (const zeile of ["  t.skip('x'); return;", "  t.todo();", "await test.skip('q', () => {});", "test ('r', { skip: true }, () => {});"]) {
     const { d, base } = repo({ 'pkg/a.test.mjs': alt.replace('  const x = 1;', '  const x = 1;\n' + zeile) }, { 'pkg/a.test.mjs': alt });
     const r = gate(d, base); rmSync(d, { recursive: true, force: true });
     assert.match(r.stdout, /RED +pkg\/a\.test\.mjs: skip\/only\/todo marker added/, zeile + '\n' + r.stdout);

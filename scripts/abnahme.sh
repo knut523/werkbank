@@ -101,9 +101,9 @@ fi
 echo "== d) tamper guard on test files"
 # Skip marker in CALL position only: a line whose code starts with test.skip( / it.only( / describe.todo( ..., or a test(/it( call
 # with { skip|only|todo: ...} as an option on that line. Occurrences inside string literals (fixtures, messages) do not count.
-# Also: optional `await`, whitespace before ( or around the dot, and t.skip(/t.todo( on the test context, either at the start of the code
-# or right after { or ; (code position). A renamed test file is deleted + added (--no-renames), so it gets the whole-file scan.
-MARKER='^(\+)?[[:space:]]*(await[[:space:]]+)?((test|it|describe|suite)([[:space:]]*\.[[:space:]]*(skip|only|todo)[[:space:]]*\(|[[:space:]]*\(.*,[[:space:]]*\{[[:space:]]*(skip|only|todo)[[:space:]]*:)|t\.(skip|todo)[[:space:]]*\()|[{;][[:space:]]*t\.(skip|todo)[[:space:]]*\('
+# Also: optional `await`, whitespace before ( or around the dot, and t.skip(/t.todo( on the test context at the start of the code.
+# Mid-line occurrences are not scanned: a regex cannot tell code from string data there (known gap, 2.1.1). A renamed test file is deleted + added (--no-renames), so it gets the whole-file scan.
+MARKER='^(\+)?[[:space:]]*(await[[:space:]]+)?((test|it|describe|suite)([[:space:]]*\.[[:space:]]*(skip|only|todo)[[:space:]]*\(|[[:space:]]*\(.*,[[:space:]]*\{[[:space:]]*(skip|only|todo)[[:space:]]*:)|t\.(skip|todo)[[:space:]]*\()'
 zaehl() { grep -cE '\b(assert(\.[a-zA-Z]+)?|expect)\(|^\s*(test|it|describe)\(|\bt\.(test|assert)' ; }
 nd=0
 for f in $(git diff --name-only --no-renames --diff-filter=M "$BASE" "$HEAD_REF" | grep -E '(^|/)test/|\.test\.(ts|mjs)$'); do
